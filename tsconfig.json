@@ -4,7 +4,6 @@
     "lib": ["ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -14,7 +13,6 @@
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
     "forceConsistentCasingInFileNames": true,
-
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "declaration": true,
@@ -25,6 +23,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "dist", "tests/fixtures/**"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

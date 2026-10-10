@@ -288,12 +288,12 @@ export function resolveConfig(input: VideoConfigInput = {}): VideoConfig {
       args: requireStringArray(input.browser?.args ?? [], 'browser.args'),
       extraCss: requireStringArray(input.browser?.extraCss ?? [], 'browser.extraCss'),
       colorScheme: requireEnum(
-        input.browser?.colorScheme ?? DEFAULT_CONFIG.browser.colorScheme,
+        pick(input.browser?.colorScheme, DEFAULT_CONFIG.browser.colorScheme),
         ['dark', 'light', null],
         'browser.colorScheme',
       ),
       reducedMotion: requireEnum(
-        input.browser?.reducedMotion ?? DEFAULT_CONFIG.browser.reducedMotion,
+        pick(input.browser?.reducedMotion, DEFAULT_CONFIG.browser.reducedMotion),
         ['reduce', null],
         'browser.reducedMotion',
       ),
@@ -434,7 +434,18 @@ function requireInteger(value: number, field: string, min: number, max: number):
   return value;
 }
 
-/** A non-negative whole number of milliseconds. Negative delays would move logical time backwards. */
+/**
+ * Choose between an explicit value and a default.
+ *
+ * Deliberately not `??`. For `colorScheme` and `reducedMotion`, `null` is a meaningful value
+ * meaning "leave the browser default alone", and `??` cannot tell it apart from "not provided"
+ * — so passing `null` silently kept the default and the setting could never be turned off.
+ */
+function pick<T>(value: T | undefined, fallback: T): T {
+  return value === undefined ? fallback : value;
+}
+
+/** Non-negative whole number of milliseconds. Negative delays would move logical time backwards. */
 function requireDuration(value: number, field: string): number {
   const resolved = requireInteger(value, field, 0, 600_000);
   return resolved;

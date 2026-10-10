@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /*
+     * Tests add the DOM library, and `src/` does not.
+     *
+     * `page.evaluate` callbacks execute inside the browser, so they legitimately reference
+     * `document`, `getComputedStyle` and friends. Giving the whole project the DOM library
+     * would also let `src/` reach for browser globals from Node, which fails at runtime with a
+     * confusing "document is not defined" — so the split is deliberate.
+     */
+    "lib": ["ES2023", "DOM"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

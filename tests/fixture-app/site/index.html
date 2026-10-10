@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>autovideo fixture</title>
+    <style>
+      /*
+       * Everything here is deterministic on purpose.
+       *
+       * The fixture exists to prove that two renders of one script produce identical frames, so
+       * nothing may depend on the wall clock, Math.random(), or a system font that could differ
+       * between machines. Time, values and animation phases are all fixed.
+       */
+      :root {
+        --bg: #0b1020;
+        --panel: #151d33;
+        --ink: #e6ecf7;
+        --muted: #8fa0c0;
+        --accent: #4c8dff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          16px/1.5 -apple-system,
+          'Helvetica Neue',
+          Arial,
+          sans-serif;
+        min-height: 4000px;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        padding: 16px 20px;
+        background: #0e1526;
+        border-bottom: 1px solid #22304f;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.02em;
+      }
+      main {
+        padding: 20px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid #24314f;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+      h2 {
+        margin: 0 0 12px;
+        font-size: 15px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      input,
+      select {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        color: var(--ink);
+        background: #0d1424;
+        border: 1px solid #2c3c60;
+        border-radius: 8px;
+      }
+      button {
+        margin-top: 12px;
+        padding: 12px 20px;
+        font-size: 15px;
+        color: #fff;
+        background: var(--accent);
+        border: 0;
+        border-radius: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: flex-end;
+      }
+      .row > div {
+        flex: 1;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      td {
+        padding: 8px 6px;
+        border-bottom: 1px solid #1e2a45;
+      }
+      td:last-child {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #chart {
+        width: 100%;
+        height: 220px;
+      }
+
+      /*
+       * Deliberately animated. The framework's determinism stylesheet must freeze this, so a
+       * golden frame comparison proves animation suppression actually works rather than merely
+       * being present in the stylesheet.
+       */
+      .spinner {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 3px solid #24314f;
+        border-top-color: var(--accent);
+        animation: spin 1s linear infinite;
+        margin: 12px 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .pulse {
+        animation: pulse 2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header><h1>autovideo fixture app</h1></header>
+
+    <main>
+      <!-- Search flow: the canonical first interaction for a demo video. -->
+      <section class="panel" data-testid="search-panel">
+        <h2>Search</h2>
+        <div class="row">
+          <div>
+            <label for="ticker">Ticker symbol</label>
+            <input id="ticker" data-testid="ticker-search" placeholder="e.g. AAPL" />
+          </div>
+          <div>
+            <label for="range">Range</label>
+            <select id="range" data-testid="range-select">
+              <option value="1mo">1 month</option>
+              <option value="1y" selected>1 year</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+        </div>
+        <button id="analyse" data-testid="analyse-button">Analyse</button>
+        <div
+          id="ticker-error"
+          data-testid="ticker-error"
+          style="color: #ff8080; margin-top: 8px"
+        ></div>
+      </section>
+
+      <!-- Appears only after Analyse. Tests waiting on a state change rather than a sleep. -->
+      <section class="panel" data-testid="results" hidden>
+        <h2>Result</h2>
+        <table data-testid="result-table">
+          <tbody>
+            <tr>
+              <td data-testid="result-symbol">AAPL</td>
+              <td data-testid="result-price">189.45</td>
+            </tr>
+            <tr>
+              <td>Change</td>
+              <td data-testid="result-change">+1.84%</td>
+            </tr>
+            <tr>
+              <td>Volume</td>
+              <td data-testid="result-volume">54.2M</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Chart, far enough down the page that scrollTo has real work to do. -->
+      <section class="panel" data-testid="chart-panel" style="margin-top: 900px">
+        <h2>Price chart</h2>
+        <svg id="chart" data-testid="chart-plot" viewBox="0 0 480 220" preserveAspectRatio="none">
+          <polyline
+            id="chart-line"
+            fill="none"
+            stroke="#4c8dff"
+            stroke-width="2"
+            points="0,180 40,160 80,170 120,120 160,140 200,90 240,110 280,70 320,85 360,50 400,65 440,30 480,45"
+          />
+          <line x1="0" y1="200" x2="480" y2="200" stroke="#24314f" />
+        </svg>
+      </section>
+
+      <!-- Animation probes, for golden frames and determinism CSS assertions. -->
+      <section class="panel" data-testid="animation-probe" style="margin-top: 700px">
+        <h2>Animation probes</h2>
+        <div class="spinner" data-testid="spinner"></div>
+        <div class="pulse" data-testid="pulse">pulsing text</div>
+      </section>
+
+      <!-- Redaction target for browser.extraCss tests. -->
+      <section class="panel secret" data-testid="secret-panel" style="margin-top: 500px">
+        <h2>Account</h2>
+        <p class="user-email" data-testid="user-email">viewer@example.com</p>
+      </section>
+    </main>
+
+    <script>
+      /*
+       * Fixed latency and fixed output — no Date.now(), no Math.random() anywhere. The results
+       * panel appears after a constant delay so a test can prove the framework waits on state.
+       */
+      const analyse = document.getElementById('analyse');
+      const results = document.getElementById('results');
+      const error = document.getElementById('ticker-error');
+      const symbolCell = document.querySelector('[data-testid="result-symbol"]');
+
+      analyse.addEventListener('click', () => {
+        const symbol = document.getElementById('ticker').value.trim().toUpperCase();
+        error.textContent = '';
+        results.hidden = true;
+
+        if (!/^[A-Z]{1,6}$/.test(symbol)) {
+          error.textContent = 'Enter a valid ticker symbol.';
+          return;
+        }
+
+        // Constant 300ms — the framework must wait for the panel, not for a fixed 1000ms.
+        setTimeout(() => {
+          symbolCell.textContent = symbol;
+          results.hidden = false;
+        }, 300);
+      });
+    </script>
+  </body>
+</html>

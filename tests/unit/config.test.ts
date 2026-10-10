@@ -303,6 +303,16 @@ describe('resolveConfig — validation', () => {
     );
   });
 
+  it('distinguishes an explicit null from an omitted value', () => {
+    // For colorScheme and reducedMotion, null means "leave the browser default alone". Using
+    // `??` cannot tell that apart from "not provided", so null silently kept the default.
+    expect(resolveConfig({ browser: { reducedMotion: null } }).browser.reducedMotion).toBeNull();
+    expect(resolveConfig({ browser: { colorScheme: null } }).browser.colorScheme).toBeNull();
+    // Omitting them still gets the defaults.
+    expect(resolveConfig({}).browser.reducedMotion).toBe('reduce');
+    expect(resolveConfig({}).browser.colorScheme).toBe('dark');
+  });
+
   it('copies arrays so later mutation of the caller object cannot alter config', () => {
     const args = ['--mute-audio'];
     const config = resolveConfig({ browser: { args } });
