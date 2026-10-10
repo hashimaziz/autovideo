@@ -1,0 +1,15 @@
+{
+  "name": "VideoRenderError",
+  "message": "Tried to move the cursor to #no-such-element, which has no box.",
+  "context": {
+    "scene": "analysis",
+    "action": "click",
+    "selector": "#no-such-element",
+    "url": "http://127.0.0.1:59039/",
+    "elapsedMs": 20433.333333333332
+  },
+  "artifacts": {
+    "trace": "/Users/hashimaziz/Documents/GitHub/autovideo/debug/2026-10-10T07-07-06-637Z/trace.zip"
+  },
+  "cause": "Tried to move the cursor to #no-such-element, which has no box."
+}

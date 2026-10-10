@@ -28,8 +28,13 @@ export class VideoError extends Error {
     this.hint = options.hint;
   }
 
-  /** Plain object form, for `error.json` in the diagnostics folder. */
-  toJSON(): { name: string; message: string; hint: string | undefined } {
+  /**
+   * Plain object form, for `error.json` in the diagnostics folder.
+   *
+   * Deliberately open-ended: subclasses add their own context and artefact lists, and narrowing
+   * this signature would make that an override error rather than an extension.
+   */
+  toJSON(): Record<string, unknown> {
     return { name: this.name, message: this.message, hint: this.hint };
   }
 }

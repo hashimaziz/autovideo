@@ -29,7 +29,7 @@
  * is renamed into place only after everything has succeeded.
  */
 
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { createActions, type Actions } from '../browser/actions.js';
@@ -43,6 +43,8 @@ import { travelDuration, type Point } from '../motion/interpolation.js';
 import { startEncoder, type Encoder } from '../recorder/encoder.js';
 import { createFramePump, type FramePump } from '../recorder/frame-pump.js';
 import { LogicalClock } from '../runtime/clock.js';
+import { BrowserLog, captureDiagnostics } from '../runtime/diagnostics.js';
+import { asRenderError, VideoRenderError, type ArtifactList } from '../runtime/render-error.js';
 import { Timeline } from '../runtime/timeline.js';
 import { VideoError, VideoActionError } from '../runtime/errors.js';
 import { VERSION } from '../version.js';
@@ -180,6 +182,34 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   const clock = new LogicalClock();
   const timeline = new Timeline(clock);
   const track = new MotionTrack();
+  const log = new BrowserLog();
+
+  /** The action currently executing, so a failure can name it. */
+  let currentAction: { type: string; target: string | undefined } | undefined;
+
+  const outputDir = isAbsolute(config.outputDir)
+    ? config.outputDir
+    : resolve(process.cwd(), config.outputDir);
+
+  /**
+   * Identifies this run in artefact paths.
+   *
+   * A timestamp rather than nothing: diagnostics are most valuable when several runs are
+   * compared, and overwriting the previous failure destroys the only copy of the bug you just
+   * spent an hour reproducing.
+   */
+  const runStamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+  /**
+   * Where a failed run writes its diagnostics.
+   *
+   * A relative `debug.dir` resolves against `outputDir`, not the current working directory, so
+   * diagnostics land beside the video they explain rather than wherever the CLI happened to be
+   * run from.
+   */
+  const debugDir = isAbsolute(config.debug.dir)
+    ? resolve(config.debug.dir, runStamp)
+    : resolve(outputDir, config.debug.dir, runStamp);
 
   // Streams, so a change to one motion's draw count cannot shift another's.
   const rootRng = createRng(config.seed);
@@ -190,10 +220,6 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   const outputPath = isAbsolute(config.output)
     ? config.output
     : resolve(process.cwd(), config.output);
-  const outputDir = isAbsolute(config.outputDir)
-    ? config.outputDir
-    : resolve(process.cwd(), config.outputDir);
-
   // Scratch inside the run directory, so the rename onto the final path is same-filesystem.
   const scratchDir = resolve(outputDir, '.scratch');
   const scratchVideo = resolve(scratchDir, `render-${process.pid}-${Date.now()}.mp4`);
@@ -218,6 +244,14 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   try {
     session = await launchBrowser(config);
     await mkdir(scratchDir, { recursive: true });
+
+    log.attach(session.page);
+
+    // Tracing is context-scoped and must be started before anything is recorded, or the early
+    // frames — usually the ones that explain the failure — are missing from it.
+    if (config.debug.trace) {
+      await session.startTrace();
+    }
 
     overlay = new CursorOverlay(session.page, config.cursor);
     await overlay.ensureElement();
@@ -393,6 +427,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     },
 
     async open(url: string): Promise<void> {
+      currentAction = { type: 'open', target: url };
       const finish = timeline.begin({ type: 'open', target: url });
       timeline.set('url', url);
 
@@ -413,6 +448,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     reload: () => actions.reload(),
 
     async click(selector: string): Promise<void> {
+      currentAction = { type: 'click', target: selector };
       const finish = timeline.begin({ type: 'click', target: selector });
       await cursorApi.clickSelector(selector);
       await browserActions().click(selector);
@@ -422,6 +458,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     doubleClick: (selector: string) => actions.doubleClick(selector),
 
     async type(selector: string, text: string, options: TypeOptions = {}): Promise<void> {
+      currentAction = { type: 'type', target: selector };
       const finish = timeline.begin({ type: 'type', target: selector });
       const behaviour = options.behavior ?? 'instant';
 
@@ -461,6 +498,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     fill: (selector: string, text: string) => browserActions().fill(selector, text),
 
     async press(selector: string | undefined, key: string): Promise<void> {
+      currentAction = { type: 'press', target: selector ?? key };
       const finish = timeline.begin({ type: 'press', target: selector ?? key });
       await browserActions().press(selector, key);
       finish();
@@ -487,6 +525,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     },
 
     async waitForSelector(selector: string, options: WaitOptions = {}): Promise<void> {
+      currentAction = { type: 'waitForSelector', target: selector };
       const finish = timeline.begin({ type: 'waitForSelector', target: selector });
       await browserActions().waitForSelector(selector, options);
       finish();
@@ -512,6 +551,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     },
 
     async scrollTo(selector: string, options: NaturalOptions = {}): Promise<void> {
+      currentAction = { type: 'scrollTo', target: selector };
       const finish = timeline.begin({ type: 'scrollTo', target: selector });
 
       const offset = await browserActions().offsetToCentre(selector);
@@ -572,6 +612,15 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       await rename(scratchVideo, finalPath);
       exported = true;
       finish();
+
+      // The manifest sits beside the video, not in the debug directory: it is part of the
+      // output, not evidence of a failure. Without it two runs cannot be compared after the
+      // fact, which is the entire point of recording one.
+      await writeFile(
+        `${finalPath.replace(/\.mp4$/, '')}.manifest.json`,
+        `${JSON.stringify(manifestDocument('success'), null, 2)}\n`,
+        'utf8',
+      ).catch(() => undefined);
 
       return {
         path: finalPath,
@@ -639,11 +688,11 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     },
   };
 
-  /** Wrap every operation so a failure names the scene it happened in. */
+  /** Release everything, never masking the failure that prompted it. */
   async function cleanup(): Promise<void> {
     try {
       pump?.stop();
-      clock.rejectPending('Startup failed.');
+      clock.rejectPending('The render failed.');
       await pumping?.catch(() => undefined);
       await overlay?.destroy();
       await encoder?.finish().catch(() => undefined);
@@ -655,7 +704,176 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     }
   }
 
-  return video;
+  /**
+   * Turn any thrown value into a reported, diagnosable failure.
+   *
+   * This is the plan's §20 contract: scene, action, selector, URL, elapsed time, and where the
+   * artefacts are. The trace is written *before* the context closes — stopping it afterwards
+   * fails with "Target page, context or browser has been closed" and loses the whole recording.
+   */
+  async function reportFailure(error: unknown): Promise<VideoRenderError> {
+    const context = {
+      scene: timeline.currentScene() ?? undefined,
+      action: currentAction?.type,
+      selector: currentAction?.target,
+      url: session ? session.page.url() : undefined,
+      elapsedMs: clock.now(),
+    };
+
+    const artifacts: ArtifactList = {};
+
+    if (config.debug.trace && session) {
+      const tracePath = resolve(debugDir, 'trace.zip');
+      try {
+        await session.stopTrace(tracePath);
+        artifacts.trace = tracePath;
+      } catch {
+        // A trace that could not be written is an absent artefact, not a new failure.
+      }
+    }
+
+    const failure = asRenderError(error, context, artifacts);
+
+    // Diagnostics are captured *before* teardown, while the page is still open. Screenshotting
+    // after the context closes silently yields no file — and "the artefact is missing" is
+    // indistinguishable from "the artefact was not requested".
+    const page = session?.page;
+    if (page && !page.isClosed()) {
+      await captureDiagnostics({
+        page,
+        config: config.debug,
+        dir: debugDir,
+        log,
+        error: failure,
+        manifest: manifestDocument('failed', failure),
+        existing: artifacts,
+      }).catch(() => undefined);
+    } else {
+      // Still worth writing the manifest and error file: "the browser died" is the failure, but
+      // knowing what the script had done up to that point is exactly what the user needs.
+      await captureDiagnostics({
+        page: undefined,
+        config: config.debug,
+        dir: debugDir,
+        log,
+        error: failure,
+        manifest: manifestDocument('failed', failure),
+        existing: artifacts,
+      }).catch(() => undefined);
+    }
+
+    await cleanup();
+
+    // The output path must not hold anything that looks like a finished video.
+    await rm(outputPath, { force: true });
+
+    return new VideoRenderError(failure.message, failure.context, {
+      ...(failure.hint ? { hint: failure.hint } : {}),
+      ...(failure.cause !== undefined ? { cause: failure.cause } : {}),
+      artifacts: failure.artifacts,
+    });
+  }
+
+  /** Build the manifest document for the current run. */
+  function manifestDocument(
+    status: 'success' | 'failed',
+    failure?: VideoRenderError,
+  ): Record<string, unknown> {
+    const sealed = timeline.seal();
+    return {
+      schemaVersion: 1,
+      frameworkVersion: VERSION,
+      status,
+      startedAt: runStamp,
+      seed: config.seed,
+      fps: config.fps,
+      width: config.viewport.output.width,
+      height: config.viewport.output.height,
+      layout: config.viewport.layout,
+      layoutScale: config.layoutScale,
+      recorder: {
+        backend: config.recorder.backend,
+        crf: config.recorder.crf,
+        preset: config.recorder.preset,
+      },
+      browser: 'chromium',
+      url: timeline.get('url') ?? null,
+      durationMs: sealed.durationMs,
+      // The manifest is a record of why two runs differed. Recording only the successful fields
+      // would leave the interesting differences unrecorded.
+      ...(status === 'failed' && failure
+        ? { failure: { message: failure.message, hint: failure.hint, context: failure.context } }
+        : {}),
+      scenes: sealed.scenes.map((scene) => ({
+        name: scene.name,
+        index: scene.index,
+        startMs: scene.startMs,
+        endMs: scene.endMs,
+        durationMs: scene.durationMs,
+        metadata: scene.metadata,
+        actions: scene.actions.map((action) => ({
+          index: action.index,
+          type: action.type,
+          startMs: action.startMs,
+          durationMs: action.durationMs,
+          target: action.target ?? null,
+          visibleText: action.visibleText ?? null,
+        })),
+      })),
+      waits: clock.waits().map((wait) => ({
+        startMs: wait.startMs,
+        durationMs: wait.durationMs,
+        reason: wait.reason,
+      })),
+    };
+  }
+
+  /**
+   * Wrap every public operation so a failure gains context and diagnostics.
+   *
+   * Applied to the finished object rather than written into each method. The list of operations
+   * that get this treatment is therefore stated in one place, which is the only way to be sure
+   * the *next* action added also gets it — hand-wrapping nine methods is nine chances to forget.
+   *
+   * `dispose` is excluded: it runs during teardown, and reporting its failures would produce a
+   * second, less interesting error on top of the real one.
+   */
+  function withFailureReporting(
+    subject: Video,
+    report: (error: unknown) => Promise<VideoRenderError>,
+    /** True only for the outermost call; the cursor is nested, not recursive. */
+    isTopLevel = true,
+  ): Video {
+    const skip = new Set<keyof Video>(['dispose', 'manifest']);
+    const wrapped: Record<string, unknown> = {};
+
+    for (const [name, value] of Object.entries(subject)) {
+      if (typeof value !== 'function' || skip.has(name as keyof Video)) {
+        wrapped[name] = value;
+        continue;
+      }
+
+      wrapped[name] = async (...args: unknown[]): Promise<unknown> => {
+        try {
+          return await (value as (...callArgs: unknown[]) => Promise<unknown>).apply(subject, args);
+        } catch (error) {
+          throw await report(error);
+        }
+      };
+    }
+
+    // The cursor is a nested object of operations rather than an operation itself, so it is
+    // wrapped as well — a failure inside `video.cursor.click()` must report just as well as one
+    // inside `video.click()`. Only at the top level: recursing would look for a `cursor` on the
+    // cursor, which does not exist.
+    if (isTopLevel && 'cursor' in subject) {
+      wrapped.cursor = withFailureReporting(subject.cursor as unknown as Video, report, false);
+    }
+
+    return wrapped as unknown as Video;
+  }
+
+  return withFailureReporting(video, reportFailure);
 }
 
 function absolute(path: string): string {
