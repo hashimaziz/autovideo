@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Render output — generated artefacts, never source
+output/
+*.mp4
+*.webm
+!research/**/*.mp4
+
+# Probe scratch: videos, extracted frames, Chromium profiles
+**/.out/
+
+# Credential-bearing browser state.
+# A persistent profile holds live session cookies — never commit one.
+.auth/
+**/storage-state*.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
