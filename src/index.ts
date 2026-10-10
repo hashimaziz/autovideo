@@ -19,6 +19,10 @@
  */
 
 export { VERSION } from './version.js';
+export { ClockStalledError, LogicalClock } from './runtime/clock.js';
+export { Timeline } from './runtime/timeline.js';
+export type { ActionRecord, SceneRecord } from './runtime/timeline.js';
+export type { WaitRecord } from './runtime/clock.js';
 export { resolveConfig, VIEWPORT_PRESETS, VIEWPORT_PRESET_NAMES } from './config/config.js';
 export type {
   BrowserConfig,
