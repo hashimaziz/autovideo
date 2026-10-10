@@ -43,6 +43,9 @@ export class VideoActionError extends VideoError {}
 /** ffmpeg is missing, could not start, or failed. */
 export class VideoEncoderError extends VideoError {}
 
+/** Frame capture failed, or the recording loop stopped unexpectedly. */
+export class VideoRecorderError extends VideoError {}
+
 /**
  * Wrap anything thrown into a {@link VideoError}, preserving an existing one.
  *
