@@ -1,0 +1,29 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+
+# The audit is hand-laid-out prose with wide comparison tables. Prettier reflows
+# markdown at 88 columns, which mangles the tables and buries the diff.
+ARCHITECTURE_AUDIT.md
+
+# Research probes are one-off measurement scripts, formatted as committed in the
+# audit commit that introduced them.
+research/
+
+# Generated artefacts from probes and renders
+**/.out/
+output/
+*.mp4
+*.webm
+
+# Credential-bearing browser state: a persistent profile holds live session cookies.
+.auth/
+**/storage-state*.json
+
+# Fixture site, copied out of the repository for hermetic tests.
+# The source of truth is tests/fixture-app/site/; see its README.
+tests/fixture-app/.served/
+
+.DS_Store
+*.log
