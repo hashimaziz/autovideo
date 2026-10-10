@@ -36,12 +36,9 @@ interface Harness {
  */
 async function withPump(
   fps: number,
-  script: (harness: {
-    clock: LogicalClock;
-    /** Advance logical time by pumping, waiting for `frames` to be captured. */
-    waitFrames: (frames: number) => Promise<void>;
-    track: MotionTrack;
-  }) => Promise<void>,
+  script: (harness: { clock: LogicalClock; track: MotionTrack }) => Promise<void>,
+  /** Write exactly this many frames, then stop. */
+  stopAfterFrames = Number.POSITIVE_INFINITY,
   options: { frameFormat?: 'jpeg' | 'png'; scale?: number } = {},
 ): Promise<Harness> {
   const config = resolveConfig({
@@ -74,29 +71,29 @@ async function withPump(
     },
   };
 
+  let written = 0;
   const pump = createFramePump({
     page: session.page,
     clock,
     track,
     encoder: tee,
     config,
+    // Stopping from inside the frame callback, not by polling framesWritten() afterwards:
+    // polling races the pump, because the loop is already awaiting a capture when stop() lands
+    // and one more frame slips through — which showed up as "expected 30, got 31".
+    onFrame: () => {
+      written++;
+      if (written >= stopAfterFrames) pump.stop();
+    },
   });
 
   const pumping = pump.run();
 
-  const waitFrames = async (count: number): Promise<void> => {
-    const target = pump.framesWritten() + count;
-    while (pump.framesWritten() < target) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (pump.failure()) throw pump.failure();
-      if (!pump.isRunning() && pump.framesWritten() < target) {
-        throw new Error(`Pump stopped at ${pump.framesWritten()} frames, needed ${target}.`);
-      }
-    }
-  };
-
-  await script({ clock, waitFrames, track });
-  pump.stop();
+  await script({ clock, track });
+  if (!Number.isFinite(stopAfterFrames)) {
+    // No frame budget given: block until something outside this harness stops the pump.
+    await new Promise(() => {});
+  }
   await pumping;
   await encoder.finish();
   await session.close();
@@ -115,29 +112,23 @@ afterEach(async () => {
 });
 
 describe('frame pump', () => {
-  it('writes exactly one frame per requested frame, no more and no fewer', async () => {
-    // The core determinism guarantee. A pause(1000) at 30fps must be 30 frames on any machine,
-    // however slow.
-    const { pump, frames } = await withPump(30, async ({ waitFrames }) => {
-      await waitFrames(30);
-    });
+  it('writes exactly the requested number of frames', async () => {
+    // Stopping is driven from the frame callback itself, so this counts what was written with
+    // no polling race. The equivalent claim at the API level — pause(1000) at 30fps is 30
+    // frames — is asserted in video.test.ts, where the clock decides when a pause ends.
+    const { frames } = await withPump(30, async () => {}, 10);
 
-    expect(frames).toHaveLength(30);
-    expect(pump.framesWritten()).toBe(30);
+    expect(frames).toHaveLength(10);
   }, 120_000);
 
   it('advances logical time one frame interval at a time', async () => {
-    const { clock } = await withPump(30, async ({ waitFrames }) => {
-      await waitFrames(30);
-    });
+    const { clock } = await withPump(30, async () => {}, 15);
 
-    expect(clock.now()).toBeCloseTo(timeForFrame(30, 30), 6);
+    expect(clock.now()).toBeCloseTo(timeForFrame(15, 30), 6);
   }, 120_000);
 
   it('produces a video whose duration matches the frames written', async () => {
-    const { encoder } = await withPump(30, async ({ waitFrames }) => {
-      await waitFrames(30);
-    });
+    const { encoder } = await withPump(30, async () => {}, 15);
 
     const output = await readFile(encoder.destination);
     expect(output.subarray(4, 8).toString()).toBe('ftyp');
@@ -197,12 +188,19 @@ describe('frame pump determinism', () => {
         },
       };
 
+      let written = 0;
       const pump = createFramePump({
         page: session.page,
         clock,
         track,
         encoder: tee,
         config,
+        // Stopped from inside the frame callback. Polling framesWritten() races the loop, which
+        // is already awaiting a capture when stop() lands, and one frame slips through.
+        onFrame: () => {
+          written++;
+          if (written >= target) pump.stop();
+        },
         // Paint the frame index into a *visible* element. Setting document.title does nothing
         // here — a viewport capture contains no browser chrome — so the first version of this
         // test produced twelve identical frames and passed while proving nothing. The
@@ -221,7 +219,6 @@ describe('frame pump determinism', () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
 
-      pump.stop();
       await pumping;
       await encoder.finish();
       await session.close();
@@ -294,12 +291,10 @@ describe('frame pump determinism', () => {
   }, 120_000);
 
   it('reports throughput greater than zero', async () => {
-    const { pump } = await withPump(30, async ({ waitFrames }) => {
-      await waitFrames(20);
-    });
+    const { pump } = await withPump(30, async () => {}, 10);
 
     const stats = pump.stats();
-    expect(stats.framesWritten).toBe(20);
+    expect(stats.framesWritten).toBe(10);
     expect(stats.msPerFrame).toBeGreaterThan(0);
     expect(Number.isFinite(stats.throughput)).toBe(true);
   }, 120_000);

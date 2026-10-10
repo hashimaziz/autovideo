@@ -45,6 +45,32 @@ import { timeForFrame } from '../config/config.js';
 /** Applies the sampled motion state to the page. Injected so it can be faked in tests. */
 export type ApplyFrame = (frameIndex: number, atMs: number) => Promise<void>;
 
+/**
+ * Sentinel distinguishing "the capture timed out" from a real frame, which is a Buffer.
+ * A distinct symbol rather than `null`, so a null frame and a timed-out capture stay separable.
+ */
+const CAPTURE_TIMED_OUT = Symbol('capture-timed-out');
+
+/**
+ * How long a single capture may take before it is treated as stuck.
+ *
+ * Captures normally take ~16ms — one compositor frame. Navigation takes 100-500ms and is skipped
+ * by event rather than waited on, so anything past this bound is a capture that will not return.
+ */
+const CAPTURE_TIMEOUT_MS = 3_000;
+
+/**
+ * Hand control back to the event loop.
+ *
+ * Used by the skip path so the pump cannot starve the navigation it is waiting on.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const handle = setImmediate(resolve);
+    handle.unref?.();
+  });
+}
+
 export interface FramePumpOptions {
   page: Page;
   clock: LogicalClock;
@@ -82,8 +108,28 @@ export class FramePump {
   #framesWritten = 0;
   #startedAtMs = 0;
 
+  /**
+   * True between a main-frame navigation starting and its document settling.
+   *
+   * Capture during that window hangs forever — measured, not assumed — so it must be detected
+   * rather than waited on.
+   */
+  #navigationInFlight = false;
+
   constructor(options: FramePumpOptions) {
     this.#options = options;
+
+    const { page } = options;
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) this.#navigationInFlight = true;
+    });
+    // Both of these mean the new document is present and settled.
+    page.on('domcontentloaded', () => {
+      this.#navigationInFlight = false;
+    });
+    page.on('load', () => {
+      this.#navigationInFlight = false;
+    });
   }
 
   /** Frames successfully written so far. */
@@ -117,22 +163,43 @@ export class FramePump {
       while (!this.#stopped) {
         const atMs = timeForFrame(frameIndex, config.fps);
 
-        // Advance logical time *before* capturing, so anything awaiting a clock deadline — an
-        // action waiting out an animation, a pause — is released by this frame.
-        clock.advanceTo(atMs);
-
         if (applyFrame) {
           await applyFrame(frameIndex, atMs);
         }
 
-        const frame = await capture();
-        if (!this.#stopped || frameIndex === 0) {
-          // Always keep frame 0: a video of zero frames is invalid, and the first frame is the
-          // frame the viewer sees before anything has moved.
-          await encoder.write(frame);
-          this.#framesWritten++;
-          onFrame?.(frameIndex, atMs);
+        // Capturing while a navigation is in flight does not fail — it *hangs forever*, which
+        // was measured, not assumed. So navigations are detected up front and the frame is
+        // skipped, with a bounded race as a backstop for anything the events miss.
+        if (this.#navigationInFlight) {
+          // Yield to the event loop. Without this the skip path is a tight synchronous loop,
+          // which starves the very navigation we are waiting on: `load` never fires, the flag
+          // never clears, and the pump spins forever. That livelock presents as a render that
+          // simply stops after one or two frames.
+          await yieldToEventLoop();
+          continue;
         }
+
+        const frame = await this.#captureOrSkip(page, capture);
+
+        if (frame === null) {
+          // Skipped. Logical time deliberately does *not* advance: the frame index is the
+          // definition of time, so a frame that was not captured must not consume one. If it
+          // did, the video's length would depend on how long each navigation happened to take,
+          // which is exactly the machine-dependence this design exists to remove.
+          await yieldToEventLoop();
+          continue;
+        }
+
+        clock.advanceTo(timeForFrame(frameIndex, config.fps));
+        await encoder.write(frame);
+        this.#framesWritten++;
+        onFrame?.(frameIndex, atMs);
+
+        // Advance to the *end* of this frame's interval, not the frame's presentation time.
+        // Frame k is shown at k/fps, but after writing it the video has consumed (k+1)/fps of
+        // time. Advancing only to k/fps makes every pause one frame long: pause(1000) at 30fps
+        // would emit 31 frames instead of 30.
+        clock.advanceTo(timeForFrame(frameIndex + 1, config.fps));
 
         frameIndex++;
       }
@@ -148,6 +215,51 @@ export class FramePump {
     } finally {
       this.#running = false;
       await cdp.detach().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Capture a frame, or report that there is nothing to capture yet.
+   *
+   * Two cases return null rather than throwing, and everything else propagates. A broken CDP
+   * session must never be mistaken for "the page has not loaded yet", because that would turn a
+   * crashed render into a silently short video.
+   */
+  async #captureOrSkip(page: Page, capture: () => Promise<Buffer>): Promise<Buffer | null> {
+    if (page.isClosed()) return null;
+
+    // Backstop. Captures normally take ~16ms; a navigation takes 100-500ms. Anything past this
+    // is a stuck capture, and abandoning it is safer than blocking the run forever. The abandoned
+    // promise is given its own catch so it cannot surface later as an unhandled rejection.
+    const timeout = new Promise<typeof CAPTURE_TIMED_OUT>((resolve) => {
+      const handle = setTimeout(() => resolve(CAPTURE_TIMED_OUT), CAPTURE_TIMEOUT_MS);
+      handle.unref?.();
+    });
+
+    const attempt = capture().then(
+      (frame) => frame,
+      (error: unknown) => {
+        throw error;
+      },
+    );
+
+    try {
+      const result = await Promise.race([attempt, timeout]);
+      return result === CAPTURE_TIMED_OUT ? null : result;
+    } catch (error) {
+      void attempt.catch(() => undefined);
+
+      // Before the first navigation the page is about:blank, which has no renderer target and
+      // reports either "Not attached to an active page" or "Unable to capture screenshot". Those
+      // frames are white anyway, so they are skipped rather than treated as failures.
+      //
+      // The URL is the signal, not `document.readyState`: about:blank reports readyState
+      // 'complete', which made an earlier version of this check rethrow and kill every run.
+      const url = page.url();
+      if (url === 'about:blank' || url === '') return null;
+
+      // Anything after that is a genuine capture failure and belongs in the run manifest.
+      throw error;
     }
   }
 

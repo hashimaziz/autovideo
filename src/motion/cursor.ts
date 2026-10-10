@@ -260,6 +260,14 @@ export interface CursorMoveOptions {
   easing?: Easing;
   /** Perpendicular bulge as a fraction of travel distance. 0 is a straight line. */
   bow?: number;
+  /**
+   * Multiplier on the distance-derived duration, when no explicit duration is given.
+   *
+   * The caller draws this from a seeded stream, so the same script always produces the same
+   * variation — which is the point. A fixed duration makes two cursors covering the same
+   * distance look mechanically identical.
+   */
+  travelFactor?: number;
 }
 
 /**
@@ -271,7 +279,7 @@ export interface CursorMoveOptions {
  * as a sweep down the frame, and using one fixed duration for both is the tell of a fake cursor.
  * The 120ms floor stops a 4px correction from being a single-frame jump, which reads as a
  * glitch; the 900ms ceiling stops a very long sweep from looking like a slow drift. An explicit
- * `durationMs` overrides both.
+ * `durationMs` overrides both, and `travelFactor` scales the derived one.
  */
 export function planMove(
   from: Point,
@@ -279,8 +287,8 @@ export function planMove(
   startMs: number,
   options: CursorMoveOptions = {},
 ): { animation: (atMs: number) => Point; durationMs: number } {
-  const natural = travelDuration(from, to);
-  const durationMs = options.durationMs ?? Math.min(900, Math.max(120, natural));
+  const travel = travelDuration(from, to) * (options.travelFactor ?? 1);
+  const durationMs = options.durationMs ?? Math.min(900, Math.max(120, travel));
 
   const animation = animatePoint(startMs, startMs + durationMs, from, to, {
     easing: options.easing ?? easeInOutCubic,
@@ -288,4 +296,14 @@ export function planMove(
   });
 
   return { animation, durationMs };
+}
+
+/**
+ * A small seeded multiplier around 1.
+ *
+ * Used so repeated motions of the same distance do not read as a loop. The draw comes from a
+ * named seeded stream, so the variation is identical on every re-run of the same script.
+ */
+export function naturalVariation(rng: { between(min: number, max: number): number }): number {
+  return 1 + rng.between(-0.06, 0.06);
 }
