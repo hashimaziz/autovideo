@@ -19,3 +19,18 @@
  */
 
 export { VERSION } from './version.js';
+export { resolveConfig, VIEWPORT_PRESETS, VIEWPORT_PRESET_NAMES } from './config/config.js';
+export type {
+  BrowserConfig,
+  CursorConfig,
+  CursorMode,
+  DebugConfig,
+  RecorderBackend,
+  RecorderConfig,
+  ResolvedViewport,
+  Size,
+  VideoConfig,
+  VideoConfigInput,
+  ViewportInput,
+  ViewportPreset,
+} from './config/config.js';
