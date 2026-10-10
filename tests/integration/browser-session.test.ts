@@ -80,14 +80,19 @@ describe('chromium session', () => {
     // Deliberately not memoised: the reference implementation had a module-level cache that
     // silently skipped injection on the recording page after a pre-flight claimed it.
     await session.page.goto(server.url('/other'));
-    const transition = await session.page.evaluate(() => {
+
+    // Assert the page actually loaded. "transition-duration is 0s" is also true of a 404 page,
+    // so without this the test passes against a server that serves nothing.
+    expect(await session.page.locator('[data-testid="other-card"]').isVisible()).toBe(true);
+
+    const transition = await session.page.evaluate(`(() => {
       const probe = document.createElement('div');
       probe.style.transitionDuration = '5s';
       document.body.append(probe);
       const read = getComputedStyle(probe).transitionDuration;
       probe.remove();
       return read;
-    });
+    })()`);
 
     expect(transition).toBe('0s');
   });
@@ -113,6 +118,12 @@ describe('chromium session', () => {
     const disposable = await launchBrowser(resolveConfig());
     await disposable.close();
     await expect(disposable.close()).resolves.toBeUndefined();
+  });
+
+  it('served every requested page', async () => {
+    // A 404 page still renders, still has the determinism stylesheet applied, and still
+    // satisfies most assertions above. Counting misses makes that failure mode visible.
+    expect(server.missing()).toBe(0);
   });
 });
 

@@ -30,6 +30,8 @@ export interface FixtureServer {
   url(path?: string): string;
   /** The port the OS assigned. */
   port: number;
+  /** Requests that resolved to a 404. Assert this is zero at the end of a suite. */
+  missing(): number;
   close(): Promise<void>;
 }
 
@@ -42,6 +44,8 @@ export interface FixtureServer {
 export async function createFixtureServer(
   options: { delayMs?: number } = {},
 ): Promise<FixtureServer> {
+  let missCount = 0;
+
   const server: Server = createServer((request, response) => {
     const send = async (): Promise<void> => {
       const requested = new URL(request.url ?? '/', 'http://localhost').pathname;
@@ -56,24 +60,36 @@ export async function createFixtureServer(
 
       // A static site needs directory index resolution, and `readFile` on a directory throws
       // EISDIR, so the path is resolved with stat before reading.
-      const stats = await stat(filePath).catch(() => null);
-      if (stats?.isDirectory()) {
-        filePath = join(filePath, 'index.html');
+      const candidates = [filePath, join(filePath, 'index.html'), `${filePath}.html`];
+
+      let body: Buffer | undefined;
+      for (const candidate of candidates) {
+        const stats = await stat(candidate).catch(() => null);
+        if (!stats?.isFile()) continue;
+
+        body = await readFile(candidate);
+        filePath = candidate;
+        break;
       }
 
-      try {
-        const body = await readFile(filePath);
-
-        response.writeHead(200, {
-          'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
-          // Deterministic caching: a stale cached page would make two runs differ.
-          'cache-control': 'no-store',
-        });
-        response.end(body);
-      } catch {
+      if (body === undefined) {
         response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
+        return;
       }
+
+      response.writeHead(200, {
+        'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
+        // Deterministic caching: a stale cached page would make two runs differ.
+        'cache-control': 'no-store',
+      });
+      response.end(body);
     };
+
+    // Track 404s so a test run can assert nothing was silently missing. Two suites in a row
+    // passed against this server serving 404 pages: one because a title assertion was vacuous,
+    // one because "transition-duration is 0s" is true on a 404 page too. A recorded 404 list
+    // turns that class of silent breakage into a visible one.
+    if (response.statusCode === 404) missCount++;
 
     if (options.delayMs) {
       setTimeout(() => void send(), options.delayMs);
@@ -90,6 +106,7 @@ export async function createFixtureServer(
 
   return {
     port: address.port,
+    missing: () => missCount,
     url: (path = '/') => `http://127.0.0.1:${address.port}${path}`,
     close: () =>
       new Promise<void>((resolve, reject) =>
