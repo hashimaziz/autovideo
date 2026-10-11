@@ -37,6 +37,23 @@ autovideo doctor --url <url>      # check a render could succeed
 
 ## Why it works differently
 
+### The two backends, measured
+
+The plan asked for the alternatives to be benchmarked rather than argued about. Both are
+implemented and the comparison is a test:
+
+| backend              | video | render    | throughput         | cursor |
+| -------------------- | ----- | --------- | ------------------ | ------ |
+| **frames** (default) | 4.00s | **2.18s** | **1.83× realtime** | yes    |
+| `--screencast`       | 4.02s | 4.72s     | 0.85× realtime     | no     |
+
+The screencast is the one you get out of the box, and it records in real time — so it is natural
+to assume it is the fast option. Measured, it is not: it spends four seconds capturing and then
+another second transcoding, while the frame pipeline finishes before the video it is producing
+has finished playing. It is both slower and less capable, which is why it is not the default.
+
+It is kept, and kept tested, because a benchmark needs both implementations to mean anything.
+
 ### The cursor is drawn, not captured
 
 Playwright's built-in video recording **never renders the mouse cursor**. This was measured, not

@@ -74,7 +74,7 @@ describe('readRunOptions', () => {
       seed: 0,
       layoutScale: 2,
       headed: false,
-      fast: false,
+      screencast: false,
     });
   });
 
@@ -93,6 +93,13 @@ describe('readRunOptions', () => {
 
   it('accepts a viewport given as dimensions', () => {
     expect(readRunOptions(parseArgs(['--viewport', '1280x720'])).viewport).toBe('1280x720');
+  });
+
+  it('selects the screencast backend by name', () => {
+    // The flag was `--fast` until measurement showed the frame pipeline is the faster of the
+    // two — 1.83x realtime against 0.85x. A flag that asserts something untrue is worse than no
+    // flag, so it was renamed rather than kept.
+    expect(readRunOptions(parseArgs(['--screencast'])).screencast).toBe(true);
   });
 });
 

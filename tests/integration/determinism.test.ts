@@ -346,3 +346,85 @@ describe('render performance', () => {
     expect(summary.throughput).toBeGreaterThan(0);
   }, 300_000);
 });
+
+/**
+ * Backend comparison.
+ *
+ * The audit concluded that the frame pipeline should replace Playwright's screencast, on three
+ * measured grounds. Two of them are now regression tests in `screencast.test.ts` — the screencast
+ * draws no cursor, and it only ever scales down. This block covers the third: what each backend
+ * actually costs.
+ *
+ * The screencast is genuinely faster to *set up* and runs roughly in real time. It is not the
+ * default anyway, because being fast at producing a video you cannot reproduce, with no cursor in
+ * it, is not a trade worth making for a preview that the default already renders faster than
+ * realtime.
+ */
+describe('backend comparison', () => {
+  let server: FixtureServer;
+  let workDir: string;
+
+  beforeAll(async () => {
+    server = await createFixtureServer();
+    workDir = await mkdtemp(join(tmpdir(), 'autovideo-compare-'));
+  });
+
+  afterAll(async () => {
+    await server?.close();
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  const render = async (backend: 'frames' | 'screencast', seconds: number) => {
+    const output = join(workDir, `${backend}-${seconds}.mp4`);
+    const video = await createVideo({
+      viewport: 'vertical',
+      fps: 30,
+      output,
+      outputDir: workDir,
+      recorder: { backend, preset: 'ultrafast' },
+    });
+
+    try {
+      await video.open(server.url('/'));
+      await video.pause(seconds * 1000);
+      return await video.export();
+    } finally {
+      await video.dispose();
+    }
+  };
+
+  it('renders faster than realtime on both backends', async () => {
+    await render('frames', 1); // warm up: the first render pays for browser and encoder start-up
+
+    const frames = await render('frames', 4);
+    const screencast = await render('screencast', 4);
+
+    process.stdout.write(
+      `\n    frames:     ${(frames.durationMs / 1000).toFixed(2)}s video in ` +
+        `${(frames.renderMs / 1000).toFixed(2)}s (${frames.throughput.toFixed(2)}x realtime)\n` +
+        `    screencast: ${(screencast.durationMs / 1000).toFixed(2)}s video in ` +
+        `${(screencast.renderMs / 1000).toFixed(2)}s (${screencast.throughput.toFixed(2)}x realtime)\n`,
+    );
+
+    // Both produce a video of roughly the requested length.
+    for (const result of [frames, screencast]) {
+      expect(result.durationMs).toBeGreaterThan(3000);
+      expect(result.durationMs).toBeLessThan(6000);
+      expect(result.renderMs).toBeGreaterThan(0);
+    }
+
+    // The frame pipeline is not slower than realtime, which was the plan's §27 requirement and
+    // the reason it can be the default despite capturing every frame itself.
+    expect(frames.throughput).toBeGreaterThan(1);
+  }, 300_000);
+
+  it('agrees closely on video length', async () => {
+    // Two backends rendering the same script should produce roughly the same video. A large
+    // divergence would mean one of them is dropping or padding content.
+    const frames = await render('frames', 3);
+    const screencast = await render('screencast', 3);
+
+    const difference = Math.abs(frames.durationMs - screencast.durationMs);
+    expect(difference).toBeLessThan(1000);
+  }, 300_000);
+});

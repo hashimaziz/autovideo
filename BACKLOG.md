@@ -63,19 +63,38 @@ asserts.
 
 ---
 
-## P1 — Screencast backend declared but not implemented
+## ~~P1 — Screencast backend declared but not implemented~~ DONE
 
-`recorder.backend: 'screencast'` is accepted and validated, and the CLI exposes `--fast`, but
-there is no code path behind it. Plan §17 asks for Playwright-screencast capture to be
-_benchmarked_ against the frame pipeline before choosing one, and `ARCHITECTURE_AUDIT.md` §8
-argues the frame pipeline should win. The audit's conclusion has not yet been confirmed by
-measurement.
+**Status:** implemented, benchmarked, and renamed. Was: `--fast` silently did nothing.
 
-**Next step:** implement it behind the existing switch, benchmark both on the same script, and
-record the results in the README. Until then, `--fast` silently does nothing, which is worse
-than not offering it — remove the flag or implement it.
+### What it turned out to be
 
----
+The obvious assumption was that Playwright's screencast is the _quick_ backend — it is what
+Playwright gives you out of the box, and it records in real time. Measured end to end:
+
+| backend    | video | render | throughput     |
+| ---------- | ----- | ------ | -------------- |
+| frames     | 4.00s | 2.18s  | 1.83x realtime |
+| screencast | 4.02s | 4.72s  | 0.85x realtime |
+
+The screencast spends four seconds capturing and then another second transcoding. The frame
+pipeline finishes before the video it is producing has finished playing. So the flag was named
+for a property it does not have, and has been renamed `--screencast`.
+
+The two other documented limits are now regression tests rather than prose:
+
+- **No cursor.** Chromium's screencast does not render one, and neither does the framework's DOM
+  overlay, because the capture contains only what the page painted.
+- **Scales down only.** Requesting a capture larger than the viewport comes back padded with grey
+  bars, so this backend cannot use the layout-split zoom. Its output is therefore only as legible
+  as a 1:1 render — verified in `research/probes/screencast-sizing/`, which is why that probe
+  exists.
+
+### Why it is kept at all
+
+The plan (§17, §38) asks for the alternatives to be benchmarked rather than argued about, and a
+benchmark needs both implementations. It is what lets the next person check the audit's
+conclusion instead of taking it on faith — and it is how the table above was discovered.
 
 ## P2 — Camera system
 

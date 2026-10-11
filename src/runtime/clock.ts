@@ -135,6 +135,39 @@ export class LogicalClock {
   }
 
   /**
+   * Drive the clock from wall-clock time instead of from frames.
+   *
+   * The frame-pump backend advances logical time as frames are captured, which is what makes a
+   * `pause` render as real stillness and makes the video reproducible. The screencast backend has
+   * no frame pump — Chromium emits frames on its own schedule — so without this a `pause` would
+   * wait on a deadline nothing advances and every render would hang.
+   *
+   * The trade-off is exactly the one the audit identified: timing now depends on the machine, and
+   * the video is not reproducible frame-for-frame. That is acceptable for a preview backend and is
+   * why it is not the default.
+   *
+   * @param intervalMs How often to advance. 16ms keeps pause accuracy well under a frame.
+   * @returns A function that detaches the driver.
+   */
+  attachWallClock(intervalMs = 16): () => void {
+    const origin = Date.now();
+    const originAt = this.#currentMs;
+    let detached = false;
+
+    const timer = setInterval(() => {
+      if (detached) return;
+      this.advanceTo(originAt + (Date.now() - origin));
+    }, intervalMs);
+
+    return () => {
+      detached = true;
+      clearInterval(timer);
+      // Land exactly on real elapsed time, so the final timestamp is not up to one interval stale.
+      this.advanceTo(originAt + (Date.now() - origin));
+    };
+  }
+
+  /**
    * Advance logical time.
    *
    * Monotonic by construction: moving backwards is refused, because a frame index that went

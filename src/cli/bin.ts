@@ -41,8 +41,9 @@ Render options
       --output-dir <path>   Root for manifests and debug artefacts
       --storage-state <p>   Playwright storageState file for authenticated apps
       --headed              Show the browser window
-      --fast                Use Playwright's screencast. Faster, but no cursor and
-                            non-deterministic frames. For previews only.
+      --screencast          Record with Playwright's built-in screencast instead of the frame
+                            pipeline. Slower, and draws no cursor — kept so the backend
+                            comparison in the tests can actually be run.
       --debug-frames        Dump every captured frame on failure (large)
 
 Inspect options
@@ -61,7 +62,7 @@ interface RunOptions {
   layoutScale: number;
   storageState: string | undefined;
   headed: boolean;
-  fast: boolean;
+  screencast: boolean;
   debugFrames: boolean;
   url: string | undefined;
 }
@@ -77,7 +78,7 @@ export function readRunOptions(args: ParsedArgs): RunOptions {
     layoutScale: intOption(args, 'layout-scale', 2, { min: 1, max: 4 }),
     storageState: args.options['storage-state'],
     headed: flag(args, 'headed'),
-    fast: flag(args, 'fast'),
+    screencast: flag(args, 'screencast'),
     debugFrames: flag(args, 'debug-frames'),
     url: args.options.url,
   };
@@ -93,7 +94,7 @@ const KNOWN_OPTIONS = [
   'layout-scale',
   'storage-state',
   'headed',
-  'fast',
+  'screencast',
   'debug-frames',
   'url',
   'help',
@@ -126,7 +127,7 @@ async function executeScript(
     AUTOVIDEO_SEED: String(options.seed),
     AUTOVIDEO_LAYOUT_SCALE: String(options.layoutScale),
     AUTOVIDEO_HEADED: options.headed ? '1' : '0',
-    AUTOVIDEO_FAST: options.fast ? '1' : '0',
+    AUTOVIDEO_SCREENCAST: options.screencast ? '1' : '0',
     AUTOVIDEO_DEBUG_FRAMES: options.debugFrames ? '1' : '0',
     ...(options.storageState
       ? { AUTOVIDEO_STORAGE_STATE: resolve(process.cwd(), options.storageState) }

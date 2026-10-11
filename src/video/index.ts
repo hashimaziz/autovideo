@@ -43,6 +43,11 @@ import { MotionTrack, animateNumber } from '../motion/track.js';
 import { travelDuration, type Point } from '../motion/interpolation.js';
 import { startEncoder, type Encoder } from '../recorder/encoder.js';
 import { createFramePump, type FramePump } from '../recorder/frame-pump.js';
+import {
+  startScreencastRecorder,
+  trimVideo,
+  type ScreencastRecorder,
+} from '../recorder/screencast.js';
 import { LogicalClock } from '../runtime/clock.js';
 import { BrowserLog, captureDiagnostics } from '../runtime/diagnostics.js';
 import { asRenderError, VideoRenderError, type ArtifactList } from '../runtime/render-error.js';
@@ -233,6 +238,8 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   // Scratch inside the run directory, so the rename onto the final path is same-filesystem.
   const scratchDir = resolve(outputDir, '.scratch');
   const scratchVideo = resolve(scratchDir, `render-${process.pid}-${Date.now()}.mp4`);
+  /** Where Chromium writes screencast segments, before they are flushed and converted. */
+  const rawScreencastDir = resolve(scratchDir, 'screencast');
 
   await mkdir(dirname(outputPath), { recursive: true });
   await mkdir(scratchDir, { recursive: true });
@@ -241,6 +248,9 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   let actions: Actions | undefined;
   let encoder: Encoder | undefined;
   let pump: FramePump | undefined;
+  let screencast: ScreencastRecorder | undefined;
+  /** Detaches the wall-clock driver in screencast mode; undefined in frame-pump mode. */
+  let detachWallClock: (() => void) | undefined;
   let overlay: CursorOverlay | undefined;
   let exported = false;
   let lastExport: ExportResult | undefined;
@@ -252,9 +262,22 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   let clickEmphasisUntilMs = -1;
   let currentCursor: Point = { x: 0, y: 0 };
 
+  // Wall-clock origin for the screencast backend, which has no frame pump to report timing from.
+  const renderStartedAt = Date.now();
+
+  // The screencast backend cannot use the layout split: Playwright's screencast only ever scales
+  // down, so a capture larger than the viewport comes back padded with grey bars rather than
+  // enlarged. The browser therefore lays out at the output resolution — which also means the
+  // result is only as legible as a 1:1 render, one of the reasons this is not the default.
+  const useScreencast = config.recorder.backend === 'screencast';
+
   try {
-    session = await launchBrowser(config);
+    session = await launchBrowser(
+      config,
+      useScreencast ? { recordVideo: { dir: rawScreencastDir, size: config.viewport.output } } : {},
+    );
     await mkdir(scratchDir, { recursive: true });
+    if (useScreencast) await mkdir(rawScreencastDir, { recursive: true });
 
     log.attach(session.page);
 
@@ -274,50 +297,68 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       navigationTimeout: config.timeouts.navigation,
     });
 
-    encoder = startEncoder(
-      config.recorder,
-      config.fps,
-      config.viewport.layout,
-      config.viewport.output,
-      scratchVideo,
-    );
+    if (useScreencast) {
+      // No frame pump means nothing advances logical time, so a `pause` would wait on a deadline
+      // that never arrives. Wall-clock time drives the clock instead — accepting, deliberately,
+      // that timing now depends on the machine.
+      detachWallClock = clock.attachWallClock();
 
-    pump = createFramePump({
-      page: session.page,
-      clock,
-      track,
-      encoder,
-      config,
-      gate,
-      applyFrame: async (_frameIndex, atMs) => {
-        // Sample the track, then paint it. This runs before every capture, which is what makes
-        // frame N's contents a function of N alone.
-        const position = track.sampleCursor(atMs);
-        const scrollY = track.sampleScrollY(atMs);
-        currentCursor = position;
+      screencast = startScreencastRecorder((destination) => session!.saveScreencast(destination), {
+        config: config.recorder,
+        size: config.viewport.output,
+        scratchVideo,
+        destination: scratchVideo.replace(/\.mp4$/, '.screencast.mp4'),
+      });
 
-        if (Math.round(scrollY) !== Math.round(track.sampleScrollY(atMs - 1000 / config.fps))) {
-          await browserActions().scrollToOffset(scrollY);
-        }
+      // The cursor overlay is pointless here: the screencast does not capture it. Saying so up
+      // front beats shipping a cursor API that silently does nothing on this backend.
+      cursorVisible = false;
+    } else {
+      encoder = startEncoder(
+        config.recorder,
+        config.fps,
+        config.viewport.layout,
+        config.viewport.output,
+        scratchVideo,
+      );
 
-        await overlay?.render({
-          position,
-          visible: cursorVisible && track.sampleCursorVisible(atMs),
-          clickEmphasis:
-            atMs <= clickEmphasisUntilMs
-              ? Math.max(0, (clickEmphasisUntilMs - atMs) / config.cursor.clickRippleMs)
-              : 0,
-        });
-      },
-    });
+      pump = createFramePump({
+        page: session.page,
+        clock,
+        track,
+        encoder,
+        config,
+        gate,
+        applyFrame: async (_frameIndex, atMs) => {
+          // Sample the track, then paint it. This runs before every capture, which is what makes
+          // frame N's contents a function of N alone.
+          const position = track.sampleCursor(atMs);
+          const scrollY = track.sampleScrollY(atMs);
+          currentCursor = position;
 
-    // Started without awaiting: the pump runs concurrently with everything below.
-    pumping = pump.run();
+          if (Math.round(scrollY) !== Math.round(track.sampleScrollY(atMs - 1000 / config.fps))) {
+            await browserActions().scrollToOffset(scrollY);
+          }
 
-    // Nothing awaits `pumping` until export(), so without this a failure in the first moments of
-    // the run surfaces as an unhandled rejection that kills the process rather than as a
-    // reported render error. The rejection is still delivered to whoever awaits `pumping`.
-    pumping.catch(() => undefined);
+          await overlay?.render({
+            position,
+            visible: cursorVisible && track.sampleCursorVisible(atMs),
+            clickEmphasis:
+              atMs <= clickEmphasisUntilMs
+                ? Math.max(0, (clickEmphasisUntilMs - atMs) / config.cursor.clickRippleMs)
+                : 0,
+          });
+        },
+      });
+
+      // Started without awaiting: the pump runs concurrently with everything below.
+      pumping = pump.run();
+
+      // Nothing awaits `pumping` until export(), so without this a failure in the first moments
+      // of the run surfaces as an unhandled rejection that kills the process rather than as a
+      // reported render error. The rejection is still delivered to whoever awaits `pumping`.
+      pumping.catch(() => undefined);
+    }
   } catch (error) {
     await cleanup();
     throw error;
@@ -631,7 +672,8 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       const finalPath = destination ? absolute(destination) : outputPath;
       const finish = timeline.begin({ type: 'export', target: finalPath });
 
-      // Stop the loop, let it flush, and only then touch the filesystem.
+      // Frame-pump backend: stop the loop and let it flush.
+      // Screencast backend: no loop exists, so there is nothing to stop.
       pump?.stop();
       await pumping?.catch((error: unknown) => {
         throw error instanceof VideoError
@@ -640,31 +682,56 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       });
       pumping = undefined;
 
-      const frames = pump?.framesWritten() ?? 0;
-      const durationMs = clock.now();
       const stats = pump?.stats();
-
-      if (frames === 0) {
-        // Nothing was captured. A zero-frame MP4 is invalid, and writing one would violate the
-        // "a failed run leaves nothing that looks finished" contract.
-        await rm(scratchVideo, { force: true });
-        finish();
-        throw new VideoError('The render produced no frames.', {
-          hint: 'This usually means the browser closed before the first capture completed.',
-        });
-      }
+      const durationMs = clock.now();
+      let frames: number;
 
       await mkdir(dirname(finalPath), { recursive: true });
-      await rename(scratchVideo, finalPath);
+
+      if (screencast) {
+        // Land exactly on real elapsed time before measuring, so the trim does not cut a frame
+        // the script was still waiting on.
+        detachWallClock?.();
+        detachWallClock = undefined;
+
+        const converted = scratchVideo.replace(/\.mp4$/, '.screencast.mp4');
+        frames = Math.round((durationMs / 1000) * config.fps);
+
+        await screencast.finish(durationMs / 1000);
+        // The screencast keeps running over a static page during teardown, which would otherwise
+        // ship as a frozen tail. Trimming to the script's own duration removes it.
+        await trimVideo(converted, durationMs / 1000, config.recorder);
+        await rename(converted, finalPath);
+      } else {
+        frames = pump?.framesWritten() ?? 0;
+
+        if (frames === 0) {
+          // Nothing was captured. A zero-frame MP4 is invalid, and writing one would violate the
+          // "a failed run leaves nothing that looks finished" contract.
+          await rm(scratchVideo, { force: true });
+          finish();
+          throw new VideoError('The render produced no frames.', {
+            hint: 'This usually means the browser closed before the first capture completed.',
+          });
+        }
+
+        await rename(scratchVideo, finalPath);
+      }
+
       exported = true;
       finish();
+
+      // The frame pump measures itself; the screencast has no pump, so its render time is the
+      // wall clock from session start to here. Reporting 0 for a backend that does real work
+      // would make the benchmark meaningless.
+      const renderMs = stats?.elapsedMs ?? Date.now() - renderStartedAt;
 
       lastExport = {
         path: finalPath,
         frames,
         durationMs,
-        renderMs: stats?.elapsedMs ?? 0,
-        throughput: stats?.throughput ?? 0,
+        renderMs,
+        throughput: renderMs > 0 ? durationMs / renderMs : 0,
       };
 
       // The manifest sits beside the video, not in the debug directory: it is part of the
@@ -718,6 +785,10 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
 
       // Stop the pump before closing the browser, or the next capture fails against a dead page.
       pump?.stop();
+      // The wall-clock driver must be detached before the browser closes, or it keeps advancing
+      // the clock against a dead page.
+      detachWallClock?.();
+      detachWallClock = undefined;
       clock.rejectPending('The video session was disposed.');
       await pumping?.catch(() => undefined);
       pumping = undefined;
@@ -732,6 +803,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
         await rm(outputPath, { force: true });
       }
       await rm(scratchVideo, { force: true });
+      await rm(rawScreencastDir, { recursive: true, force: true }).catch(() => undefined);
       await rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
     },
   };
@@ -740,12 +812,15 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   async function cleanup(): Promise<void> {
     try {
       pump?.stop();
+      detachWallClock?.();
+      detachWallClock = undefined;
       clock.rejectPending('The render failed.');
       await pumping?.catch(() => undefined);
       await overlay?.destroy();
       await encoder?.finish().catch(() => undefined);
       await session?.close().catch(() => undefined);
       await rm(scratchVideo, { force: true });
+      await rm(rawScreencastDir, { recursive: true, force: true }).catch(() => undefined);
       await rm(scratchDir, { recursive: true, force: true }).catch(() => undefined);
     } catch {
       // Teardown must never mask the original failure.

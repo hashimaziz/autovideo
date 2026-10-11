@@ -33,7 +33,9 @@ function readConfig() {
       ? { browser: { storageState: process.env.AUTOVIDEO_STORAGE_STATE } }
       : {}),
     ...(process.env.AUTOVIDEO_HEADED === '1' ? { browser: { headless: false } } : {}),
-    ...(process.env.AUTOVIDEO_FAST === '1' ? { recorder: { backend: 'screencast' as const } } : {}),
+    ...(process.env.AUTOVIDEO_SCREENCAST === '1'
+      ? { recorder: { backend: 'screencast' as const } }
+      : {}),
     ...(process.env.AUTOVIDEO_DEBUG_FRAMES === '1' ? { debug: { frames: true } } : {}),
   };
 }

@@ -107,6 +107,18 @@ export interface BrowserSession {
   startTrace(): Promise<void>;
   /** Finish the trace and write it to `destination`. No-op if tracing was never started. */
   stopTrace(destination: string): Promise<void>;
+  /**
+   * Flush the built-in screencast to `destination` and close the context.
+   *
+   * The ordering is load-bearing. `saveAs` registers a callback that resolves only once the
+   * capture finishes, and the capture finishes when the context closes — so the call has to be
+   * started first, the context closed second, and the promise awaited last. Awaiting before
+   * closing deadlocks; calling after close fails with "Target page, context or browser has been
+   * closed".
+   *
+   * Closes the context, so the session is unusable afterwards.
+   */
+  saveScreencast(destination: string): Promise<void>;
   /** Close the context and the browser. Idempotent. */
   close(): Promise<void>;
 }
@@ -117,7 +129,22 @@ export interface BrowserSession {
  * @throws {VideoBrowserError} if Chromium is not installed or fails to start. The error names
  *   the fix, because "browserType.launch: Executable doesn't exist" is not self-explanatory.
  */
-export async function launchBrowser(config: VideoConfig): Promise<BrowserSession> {
+/** Extra per-launch behaviour the recorder backends need. */
+export interface SessionExtras {
+  /**
+   * Enable Playwright's built-in screencast.
+   *
+   * `size` must equal the viewport: the screencast only ever scales *down*, so asking for a
+   * larger capture produces grey padding rather than an enlargement. Verified in
+   * `research/probes/screencast-sizing/`.
+   */
+  recordVideo?: { dir: string; size: { width: number; height: number } };
+}
+
+export async function launchBrowser(
+  config: VideoConfig,
+  extras: SessionExtras = {},
+): Promise<BrowserSession> {
   let browser: Browser;
   try {
     browser = await chromium.launch(buildLaunchOptions(config));
@@ -128,7 +155,10 @@ export async function launchBrowser(config: VideoConfig): Promise<BrowserSession
     });
   }
 
-  const context = await browser.newContext(buildContextOptions(config));
+  const context = await browser.newContext({
+    ...buildContextOptions(config),
+    ...(extras.recordVideo ? { recordVideo: extras.recordVideo } : {}),
+  });
   const page = context.pages()[0] ?? (await context.newPage());
 
   page.setDefaultTimeout(config.timeouts.action);
@@ -161,6 +191,21 @@ export async function launchBrowser(config: VideoConfig): Promise<BrowserSession
       // Must complete before the context closes — stopping after teardown fails with
       // "Target page, context or browser has been closed" and loses the entire trace.
       await context.tracing.stop({ path: destination });
+    },
+
+    async saveScreencast(destination: string): Promise<void> {
+      const capture = page.video();
+      if (!capture) {
+        await context.close().catch(() => undefined);
+        throw new VideoBrowserError('Playwright produced no screencast for this page.', {
+          hint: 'Check that the session was launched with recordVideo enabled.',
+        });
+      }
+
+      const saving = capture.saveAs(destination);
+      closed = true;
+      await context.close();
+      await saving;
     },
 
     async close(): Promise<void> {
