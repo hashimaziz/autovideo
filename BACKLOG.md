@@ -30,17 +30,17 @@ so it is a race, not a deterministic bug.
 - `page.evaluate` has the same exposure, via the same underlying reason.
 - The pump and the user's script drive the same page concurrently, so `open()` can begin a
   navigation while the pump is already inside a page call. Checking for an in-flight navigation
-  *before* each call is not sufficient: the navigation can start *during* the call.
+  _before_ each call is not sufficient: the navigation can start _during_ the call.
 
 ### Mitigations already in place
 
-| Change | Effect |
-|---|---|
-| Event-driven `#awaitNavigationSettled()` | No page calls during a known navigation |
-| `PageGate` with navigation priority | Serialises page access between pump and script |
-| Per-frame deadline (`FRAME_TIMEOUT_MS`) | A stuck frame is dropped, not fatal |
-| `encoder.write()` raced against `encoder.done` | An encoder that stops consuming cannot hang the pump |
-| Pump loop exit rejects pending waits immediately | No 30s mystery hang |
+| Change                                           | Effect                                               |
+| ------------------------------------------------ | ---------------------------------------------------- |
+| Event-driven `#awaitNavigationSettled()`         | No page calls during a known navigation              |
+| `PageGate` with navigation priority              | Serialises page access between pump and script       |
+| Per-frame deadline (`FRAME_TIMEOUT_MS`)          | A stuck frame is dropped, not fatal                  |
+| `encoder.write()` raced against `encoder.done`   | An encoder that stops consuming cannot hang the pump |
+| Pump loop exit rejects pending waits immediately | No 30s mystery hang                                  |
 
 Dropping a timed-out frame is deterministic by construction: logical time does not advance for a
 frame that was not captured, so the video loses one frame of duration and nothing else.
@@ -89,7 +89,7 @@ tests were already found passing for the wrong reason during Phase 1.
 
 `recorder.backend: 'screencast'` is accepted and validated, and the CLI exposes `--fast`, but
 there is no code path behind it. Plan §17 asks for Playwright-screencast capture to be
-*benchmarked* against the frame pipeline before choosing one, and `ARCHITECTURE_AUDIT.md` §8
+_benchmarked_ against the frame pipeline before choosing one, and `ARCHITECTURE_AUDIT.md` §8
 argues the frame pipeline should win. The audit's conclusion has not yet been confirmed by
 measurement.
 
