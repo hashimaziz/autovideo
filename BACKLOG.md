@@ -87,7 +87,7 @@ The two other documented limits are now regression tests rather than prose:
   overlay, because the capture contains only what the page painted.
 - **Scales down only.** Requesting a capture larger than the viewport comes back padded with grey
   bars, so this backend cannot use the layout-split zoom. Its output is therefore only as legible
-  as a 1:1 render — verified in `research/probes/screencast-sizing/`, which is why that probe
+  as a 1:1 render — verified in [`ARCHITECTURE.md`](ARCHITECTURE.md) §3, which is why that probe
   exists.
 
 ### Why it is kept at all
@@ -112,62 +112,25 @@ running it.
 
 ---
 
-## ~~P4 — Port the the application workflow~~ DONE (selectors verified; render needs credentials)
+## ~~P4 — Port a real production workflow~~ DONE (later moved out of this repo)
 
-**Status:** ported to `a worked example/`. All 22 selectors verified against the app's
-source. A real render needs a running app, live market data and a signed-in session, none of
-which exist in this environment — so the port is verified structurally rather than by producing
-a video.
+A full production workflow was ported onto the public API as the framework's acid test: that an
+existing workflow can be reproduced with no application-specific assumptions in the engine, where
+every selector lives in one file that imports nothing from `autovideo`.
 
-### What the port proves
+That claim was verified three ways: a selector audit that fails when the app renames a `data-testid`;
+`inspect` walking the script without launching a browser; and finally a real render against the
+running application with a signed-in session.
 
-The framework has **no the application knowledge in it**. Every test id, indicator name and route
-lives in `a worked example/selectors.ts`, which imports nothing from `autovideo`. That file is
-the only thing that would change to retarget the script.
+The port itself now lives in the application repo, where the application knowledge belongs. What
+stayed here is what it taught, and §7 and §8 of [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-What the original did by hand and the port now gets for free:
+Two bugs were found only by rendering for real, neither reachable from a fixture — a pre-filled
+input that made `type()` produce `AAPL` + `AAPL`, and a page that scrolls its `BODY`, which
+exposed two disagreeing definitions of the scrolling element and meant every scripted scroll clamped
+to zero. See §8.
 
-| original                                                         | port                                                    |
-| ---------------------------------------------------------------- | ------------------------------------------------------- |
-| `mouse.move()` before every click, hoping a screencast caught it | `cursor.moveTo` — composited and interpolated           |
-| `centerOn` + a hand-rolled easing loop                           | `scrollTo(sel, { behavior: 'natural' })`                |
-| `settle(page, 'long')` — a 1300ms `setTimeout`                   | `pause(1300)` — exactly 39 frames at 30fps, any machine |
-| manual screenshot + page HTML on failure                         | screenshot, trace, console, network, manifest           |
-| `PRIVACY_CSS` hardcoded into the engine                          | `browser.extraCss` in the script                        |
-| a persistent Chrome profile holding live session cookies         | `storageState`; contents never read                     |
-
-### How it is verified
-
-`a worked example/verify-selectors.mjs` reads every `.tsx` in the app and asserts each
-selector the port uses still exists. A renamed `data-testid` fails there rather than three scenes
-into a fifteen-minute render. All 22 pass.
-
-`autovideo inspect a worked example/stock-overview.ts` walks it — 56 operations, 6 scenes,
-~26.6s — without launching a browser.
-
-### Rendered for real
-
-Done, against the dev server with a signed-in session. Doing it found two bugs that no amount of
-selector auditing would have:
-
-1. **The ticker input arrives pre-filled.** `type` appends, so typing AAPL into it produced
-   `AAPLAAPL`, which the analyse endpoint rejected with a 500 and "symbol may be delisted". The
-   port now selects-all and deletes first, which is also what a person does.
-2. **Scrolls did nothing on the real app.** See the scrolling fix below — the last sixteen seconds
-   of the video sat at the top of the dashboard while the script believed every scroll had worked.
-
-The rendered video is correct: analysis, price summary, signals and playbooks all appear, the
-highlight rings are visible, and the email, portfolio and watchlist sections are redacted.
-
-### Still open
-
-The remaining five templates (`why_stock_down`, `technical_analysis`, `trendline`,
-`indicator_explainer`, `stock_vs_market`) are unported and would follow the same shape.
-
-One quirk worth knowing, which is app behaviour rather than a framework bug: the dashboard clears
-the chart options (Bollinger Bands, moving average, support/resistance) when analysis results
-arrive, so the port's `chart-options` beat enables overlays that are then switched off again. Either
-enable them after analysing, or drop the beat.
+The remaining five workflows of the same application are unported.
 
 ## ~~P5 — Element highlighting~~ DONE
 
@@ -263,13 +226,13 @@ Design is open. Some things worth deciding:
   hatch for anything the name lookup cannot express.
 
 Worth noting this is a problem people solve by hand today — passing CSS for the user's email, a
-portfolio section and a watchlist section in `extraCss`, precisely because there is no
-name-based way to say it. Any real application with user data is the test case.
+portfolio section and a watchlist section in `extraCss`, precisely because there is no name-based
+way to say it. Any real application with user data is the test case.
 
 ## P8 — One definition of the scrolling element (fixed, found by rendering for real)
 
-Not a planned item. Found by rendering the the application port against the real app and then reading
-the frames, which is a humbling way to find a bug the tests had been unable to see.
+Not a planned item. Found by rendering against a real application and then reading the frames,
+which is a humbling way to find a bug the tests had been unable to see.
 
 `measureElementScript` and `RESOLVE_SCROLLER_SCRIPT` disagreed about which element scrolls. Every
 other part of `scrolling.ts` checked BODY first; measurement used `document.scrollingElement`, which

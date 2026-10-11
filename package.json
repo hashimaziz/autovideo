@@ -65,10 +65,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOURNAME/autovideo.git"
+    "url": "git+https://github.com/hashimaziz/autovideo.git"
   },
   "bugs": {
-    "url": "https://github.com/YOURNAME/autovideo/issues"
+    "url": "https://github.com/hashimaziz/autovideo/issues"
   },
-  "homepage": "https://github.com/YOURNAME/autovideo#readme"
+  "homepage": "https://github.com/hashimaziz/autovideo#readme"
 }

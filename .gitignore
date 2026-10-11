@@ -9,7 +9,6 @@ dist/
 output/
 *.mp4
 *.webm
-!research/**/*.mp4
 
 # Debug artefacts. Traces embed screencast frames of whatever was on screen and a full network
 # log, so these are not just large — they are a record of whatever the app was displaying at the

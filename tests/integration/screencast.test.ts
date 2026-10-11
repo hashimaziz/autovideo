@@ -71,7 +71,7 @@ describe('screencast backend', () => {
 
   it('lays out at the output size rather than the layout size', async () => {
     // The screencast only scales *down*, so a larger capture comes back padded with grey bars.
-    // Verified in research/probes/screencast-sizing/. The consequence is that this backend cannot
+    // Verified in ARCHITECTURE.md §3. The consequence is that this backend cannot
     // use the layout-split zoom, and its output is only as legible as a 1:1 render — one of the
     // reasons it is not the default.
     const output = join(workDir, 'sizing.mp4');

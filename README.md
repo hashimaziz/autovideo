@@ -74,7 +74,7 @@ It is kept, and kept tested, because a benchmark needs both implementations to m
 Playwright's built-in video recording **never renders the mouse cursor**. This was measured, not
 assumed: sweep a mouse across a labelled box, extract frames, and look — the page renders and
 there is no cursor anywhere in it. The reproduction lives in
-[`research/probes/screencast-cursor/`](research/probes/screencast-cursor/).
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 So the cursor is a DOM element the framework positions on every frame. It scales with the layout
 viewport, needs no image-compositing dependency, and looks identical on every machine. The real
@@ -355,5 +355,5 @@ The plan asks for "substantially identical" output, not byte-identical. Two rend
 that contains only scripted timing produce byte-identical raw frames, which the test suite
 asserts.
 
-`ARCHITECTURE_AUDIT.md` documents why this framework replaced the screencast approach, including
+`ARCHITECTURE.md` documents why this framework replaced the screencast approach, including
 the measurements that motivated it.

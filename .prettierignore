@@ -9,7 +9,6 @@ ARCHITECTURE_AUDIT.md
 
 # Research probes are one-off measurement scripts, formatted as committed in the
 # audit commit that introduced them.
-research/
 
 # Generated artefacts from probes and renders
 **/.out/

@@ -13,9 +13,9 @@ import { createFixtureServer, type FixtureServer } from '../helpers/fixture-serv
 /**
  * Centring on a page that scrolls its BODY rather than the document element.
  *
- * Found by rendering the the application port against the real app: the video sat at the top of a
- * 4500px dashboard for its last sixteen seconds while the script believed every scroll had
- * happened. Nothing threw. The scrolls were being clamped to zero.
+ * Found by rendering against a real application: the video sat at the top of a 4500px page for its
+ * last sixteen seconds while the script believed every scroll had happened. Nothing threw. The
+ * scrolls were being clamped to zero.
  *
  * The cause was two disagreeing definitions of "the element that scrolls". Everything else in the
  * module checked BODY first; measurement used `document.scrollingElement`, which reports HTML even

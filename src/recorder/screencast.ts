@@ -21,14 +21,14 @@
  * 1. **It never draws a cursor.** Sweep a mouse across a labelled box, extract frames, look:
  *    the page renders and there is no cursor anywhere. A framework whose stated goal is cursor
  *    visibility as a first-class concept cannot default to this.
- *    See `research/probes/screencast-cursor/`.
+ *    See [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §1.
  *
  * 2. **It is wall-clock timed, so frames are not reproducible.** The timing is whatever the
  *    compositor emitted.
  *
  * 3. **It only ever scales down.** Requesting a capture larger than the viewport yields grey
  *    padding rather than an enlargement, so this backend cannot use the layout-split zoom.
- *    Verified in `research/probes/screencast-sizing/`.
+ *    Verified in [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §3.
  *
  * Point 3 is why a screencast render is legible only at 1:1: the page lays out at the output
  * resolution, so dense dashboards render text at roughly 1.3% of frame width. That is inherent to

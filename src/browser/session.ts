@@ -137,7 +137,7 @@ export interface SessionExtras {
    *
    * `size` must equal the viewport: the screencast only ever scales *down*, so asking for a
    * larger capture produces grey padding rather than an enlargement. Verified in
-   * `research/probes/screencast-sizing/`.
+   * [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §3.
    */
   recordVideo?: { dir: string; size: { width: number; height: number } };
 }
