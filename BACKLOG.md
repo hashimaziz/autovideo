@@ -151,13 +151,44 @@ Rendering it for real needs `PRODUCT_URL`, market data and a `storageState` file
 once by hand against the dev server; the remaining five templates (`why_stock_down`, `technical_
 analysis`, `trendline`, `indicator_explainer`, `stock_vs_market`) would follow the same shape.
 
-## P5 — Element highlighting
+## ~~P5 — Element highlighting~~ DONE
 
-Plan §2 P1.3. Straightforward given the CSS injection mechanism already in `browser/determinism.ts`,
-but it is an app-facing feature rather than a rendering primitive, so it belongs after the engine
-is solid.
+`video.highlight(selector, options?)` and `video.clearHighlight()`. Amber ring, translucent fill,
+configurable colour, width, radius and padding, with an optional self-clearing `durationMs`.
 
----
+### The part that was not straightforward
+
+The obvious implementation injects the overlay once, at the element's box at that moment, and it
+drifts the moment the page moves — which in these videos it constantly does, because scrolling is
+the main camera operation. A highlight that slides off the thing it highlights is worse than none.
+
+So the overlay holds no geometry. Every frame it re-reads `getBoundingClientRect()` inside the
+page and paints there. Scrolling, reflow and layout animations are handled for free, because the
+measurement is against live layout rather than a remembered one. The tests exist to stop that
+being quietly optimised back into a one-time measurement.
+
+The fade is likewise sampled in Node from logical time rather than run as a CSS transition: a
+transition animates in wall-clock time inside the browser and would fade differently on a slower
+machine, which is precisely the non-determinism the logical clock exists to remove. A scale
+animation would also have perturbed the ring's own measured geometry.
+
+### Verified
+
+- 15 overlay tests against a real page, including the two that matter most: the ring follows a
+  scroll, and it follows reflow.
+- 6 end-to-end renders, including a two-run determinism check on frames and duration.
+- 7 unit tests on the fade sampler, including a fade-out overlapping a fade-in (which must
+  multiply, or the ring inverts through zero and blinks) and a zero fade (which must not divide by
+  zero into a NaN opacity).
+- `examples/highlight/highlight.ts` walks under `inspect`: 17 operations, 4 scenes.
+
+### A bug worth recording
+
+The first implementation wrote `ring.style.border = 3px solid "#ffb020"` — the colour interpolated
+into a page script unquoted, which is a JavaScript _syntax error_, not a wrong colour. It was
+swallowed by the surrounding `.catch()` that exists to tolerate a destroyed execution context, so
+the ring silently never appeared and every test failed with a bare `false`. Interpolated values
+crossing into page context are quoted whole, and the comments there say why.
 
 ## P6 — Parallel rendering
 

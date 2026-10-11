@@ -10,6 +10,7 @@
  * inspect is a script whose calls are all real, so what it prints is what it would actually do.
  */
 
+import type { HighlightOptions } from '../motion/highlight.js';
 import { VIEWPORT_PRESETS, type VideoConfigInput } from '../config/config.js';
 
 /** One recorded operation. */
@@ -111,6 +112,12 @@ export function createInspectionRecorder(config: VideoConfigInput): Inspection {
     scroll: (options: { amount?: number } = {}): Promise<void> =>
       record('scroll', 500, String(options.amount ?? 600)),
     scrollTo: (selector: string): Promise<void> => record('scrollTo', 600, selector),
+
+    // A highlight's own fade is invisible in an inspection, so it is reported at the duration of
+    // the hold rather than its sub-second transitions.
+    highlight: (selector: string, options: HighlightOptions = {}): Promise<void> =>
+      record('highlight', options.durationMs ?? 300, selector),
+    clearHighlight: (): Promise<void> => record('clearHighlight', 0),
 
     scene: async <T>(name: string, body: () => Promise<T>): Promise<T> => {
       const previous = scene;

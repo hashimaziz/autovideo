@@ -38,6 +38,11 @@ import { assertAppReachable, launchBrowser, type BrowserSession } from '../brows
 import { resolveConfig, type VideoConfig, type VideoConfigInput } from '../config/config.js';
 import { createRng, type Rng } from '../seed/rng.js';
 import { CursorOverlay, naturalVariation, planMove } from '../motion/cursor.js';
+import {
+  HighlightOverlay,
+  resolveHighlightOptions,
+  type HighlightOptions,
+} from '../motion/highlight.js';
 import { easeInOutCubic, type Easing } from '../motion/easing.js';
 import { MotionTrack, animateNumber } from '../motion/track.js';
 import { travelDuration, type Point } from '../motion/interpolation.js';
@@ -147,6 +152,21 @@ export interface Video {
   scroll(options: ScrollOptions): Promise<void>;
   /** Scroll an element into the centre of the frame, animated. */
   scrollTo(selector: string, options?: NaturalOptions): Promise<void>;
+
+  /**
+   * Ring an element, and advance logical time through the fade so it actually renders.
+   *
+   * Only one highlight is up at a time: calling this again moves the ring rather than stacking a
+   * second one, because two rings on screen is a question the viewer has to answer instead of a
+   * thing the video told them.
+   *
+   * The ring re-measures the element every frame, so it stays put through scrolling and reflow.
+   * Pass `durationMs` to have it fade out on its own; otherwise it stays until the next
+   * `highlight()` or an explicit `clearHighlight()`.
+   */
+  highlight(selector: string, options?: HighlightOptions): Promise<void>;
+  /** Fade the current highlight out and advance logical time through it. */
+  clearHighlight(): Promise<void>;
 
   // Structure
   /** Run `body` as a named scene. Scenes record name, span, actions and metadata. */
@@ -277,6 +297,22 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   /** Detaches the wall-clock driver in screencast mode; undefined in frame-pump mode. */
   let detachWallClock: (() => void) | undefined;
   let overlay: CursorOverlay | undefined;
+
+  let highlightOverlay: HighlightOverlay | undefined;
+
+  /**
+   * The live highlight, or null.
+   *
+   * `fadeFromMs`/`fadeOutMs` are logical timestamps, so a fade is sampled per frame exactly like
+   * cursor movement: the ring's opacity is a function of the frame index, not of how long the
+   * render happened to take.
+   */
+  let highlightState: {
+    selector: string;
+    options: ReturnType<typeof resolveHighlightOptions>;
+    fadeFromMs: number;
+    fadeOutMs: number | null;
+  } | null = null;
   let exported = false;
   let lastExport: ExportResult | undefined;
   let disposed = false;
@@ -315,6 +351,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     overlay = new CursorOverlay(session.page, config.cursor);
     await overlay.ensureElement();
     cursorVisible = config.cursor.visible;
+    highlightOverlay = new HighlightOverlay(session.page);
 
     actions = createActions({
       page: session.page,
@@ -373,6 +410,20 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
                 ? Math.max(0, (clickEmphasisUntilMs - atMs) / config.cursor.clickRippleMs)
                 : 0,
           });
+
+          if (highlightState) {
+            // A target that vanished mid-scene must not leave a ring floating over whatever now
+            // occupies that space, so the paint reports back and the state is dropped with it.
+            const painted = await highlightOverlay?.render({
+              selector: highlightState.selector,
+              opacity: sampleHighlight(highlightState, atMs),
+              options: highlightState.options,
+            });
+
+            if (painted === false) highlightState = null;
+          } else if (highlightOverlay) {
+            await highlightOverlay.clear();
+          }
         },
       });
 
@@ -672,6 +723,52 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       finish();
     },
 
+    async highlight(selector: string, options: HighlightOptions = {}): Promise<void> {
+      // An already-fading highlight is finished first, so two highlights never overlap on screen
+      // and the caller never has to think about clearing by hand.
+      if (highlightState?.fadeOutMs !== null && highlightState !== null) {
+        await video.clearHighlight();
+      }
+
+      currentAction = { type: 'highlight', target: selector };
+      const finish = timeline.begin({ type: 'highlight', target: selector });
+
+      const resolved = resolveHighlightOptions(options);
+      highlightState = {
+        selector,
+        options: resolved,
+        fadeFromMs: clock.now(),
+        fadeOutMs: options.durationMs === undefined ? null : clock.now() + options.durationMs,
+      };
+
+      // Advancing the clock is what renders the fade. Without it the ring would snap on and the
+      // fade would never appear in the video, however long the caller subsequently pauses.
+      await clock.wait(resolved.fadeMs, 'highlight');
+
+      if (options.durationMs !== undefined) {
+        // Let the ring hold for its full duration before the caller gets control back.
+        await clock.wait(options.durationMs, 'highlight');
+        highlightState.fadeOutMs = clock.now();
+        await clock.wait(resolved.fadeMs, 'highlight');
+        highlightState = null;
+      }
+
+      finish();
+    },
+
+    async clearHighlight(): Promise<void> {
+      if (!highlightState) return;
+
+      currentAction = { type: 'clearHighlight', target: highlightState.selector };
+      const finish = timeline.begin({ type: 'clearHighlight', target: highlightState.selector });
+
+      highlightState.fadeOutMs = clock.now();
+      await clock.wait(highlightState.options.fadeMs, 'highlight');
+      highlightState = null;
+
+      finish();
+    },
+
     async scene<T>(name: string, body: () => Promise<T>, metadata?: Record<string, unknown>) {
       return timeline.scene(name, body, metadata);
     },
@@ -819,6 +916,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       pumping = undefined;
 
       await overlay?.destroy();
+      await highlightOverlay?.destroy();
       await encoder?.finish().catch(() => undefined);
       await session?.close().catch(() => undefined);
 
@@ -842,6 +940,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       clock.rejectPending('The render failed.');
       await pumping?.catch(() => undefined);
       await overlay?.destroy();
+      await highlightOverlay?.destroy();
       await encoder?.finish().catch(() => undefined);
       await session?.close().catch(() => undefined);
       await rm(scratchVideo, { force: true });
@@ -1026,6 +1125,32 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
 
 function absolute(path: string): string {
   return isAbsolute(path) ? path : resolve(process.cwd(), path);
+}
+
+/**
+ * The highlight's opacity at a moment in logical time.
+ *
+ * Sampled per frame rather than driven by a CSS transition, so the fade is frame-exact: a 180ms
+ * fade is 5.4 frames at 30fps and renders the same frames on any machine. A CSS transition
+ * animates in wall-clock time inside the page and lands differently from run to run, which is the
+ * determinism property the whole pipeline exists to provide.
+ */
+export function sampleHighlight(
+  state: { fadeFromMs: number; fadeOutMs: number | null; options: { fadeMs: number } },
+  atMs: number,
+): number {
+  const { fadeFromMs, fadeOutMs, options } = state;
+  const fade = Math.max(1, options.fadeMs);
+
+  const fadedIn = Math.min(1, Math.max(0, (atMs - fadeFromMs) / fade));
+
+  if (fadeOutMs === null) return fadedIn;
+
+  const fadedOut = Math.min(1, Math.max(0, (atMs - fadeOutMs) / fade));
+
+  // A fade-out beginning before the fade-in finished multiplies rather than subtracts, so the ring
+  // can never invert into a negative opacity and blink out.
+  return fadedIn * (1 - fadedOut);
 }
 
 /**

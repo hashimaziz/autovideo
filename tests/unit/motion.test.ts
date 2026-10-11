@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { easeInOutCubic, easeOutCubic } from '../../src/motion/easing.js';
+import { sampleHighlight } from '../../src/video/index.js';
 import {
   clamp,
   distance,
@@ -277,5 +278,59 @@ describe('isFinished', () => {
     expect(isFinished(0, 1000, 999)).toBe(false);
     expect(isFinished(0, 1000, 1000)).toBe(true);
     expect(isFinished(0, 1000, 1001)).toBe(true);
+  });
+});
+
+describe('highlight fade sampling', () => {
+  // The fade is sampled in Node from logical time rather than animated by a CSS transition, so
+  // these values are what decide the opacity of every frame. A transition would land differently
+  // on a slower machine; this cannot.
+  const hold = (fadeFromMs: number, fadeOutMs: number | null, fadeMs = 180) => ({
+    fadeFromMs,
+    fadeOutMs,
+    options: { fadeMs },
+  });
+
+  it('is transparent at the moment it starts', () => {
+    expect(sampleHighlight(hold(1000, null), 1000)).toBe(0);
+  });
+
+  it('is halfway through the fade at its midpoint', () => {
+    expect(sampleHighlight(hold(1000, null), 1090)).toBeCloseTo(0.5, 5);
+  });
+
+  it('reaches full opacity and stays there', () => {
+    expect(sampleHighlight(hold(1000, null), 1180)).toBe(1);
+    expect(sampleHighlight(hold(1000, null), 9000)).toBe(1);
+  });
+
+  it('never leaves the 0-1 range before the fade-in completes', () => {
+    // A clock that has not advanced past the start must not produce a negative opacity, which
+    // would clamp to 0 and make the ring blink.
+    expect(sampleHighlight(hold(1000, null), 0)).toBe(0);
+  });
+
+  it('fades back down after the fade-out begins', () => {
+    expect(sampleHighlight(hold(1000, 2000), 2090)).toBeCloseTo(0.5, 5);
+    expect(sampleHighlight(hold(1000, 2000), 2180)).toBe(0);
+    expect(sampleHighlight(hold(1000, 2000), 5000)).toBe(0);
+  });
+
+  it('multiplies through a fade-out that overlaps the fade-in', () => {
+    // Clearing immediately would otherwise subtract two in-progress values and invert through
+    // zero, making the ring disappear and reappear.
+    const value = sampleHighlight(hold(1000, 1050), 1065);
+
+    expect(value).toBeGreaterThanOrEqual(0);
+    expect(value).toBeLessThanOrEqual(1);
+  });
+
+  it('treats a zero fade as instant rather than dividing by zero', () => {
+    // A zero fade must not produce NaN, which would write `opacity: NaN` into the page and leave
+    // the ring invisible with no error to explain it.
+    expect(Number.isNaN(sampleHighlight(hold(1000, null, 0), 1000))).toBe(false);
+    // Still transparent on the very first frame, fully opaque on the next: instant, not broken.
+    expect(sampleHighlight(hold(1000, null, 0), 1000)).toBe(0);
+    expect(sampleHighlight(hold(1000, null, 0), 1001)).toBe(1);
   });
 });

@@ -156,6 +156,10 @@ await video.press(selector, 'Enter');
 await video.scroll({ amount: 800, behavior: 'natural' });
 await video.scrollTo(selector, { behavior: 'natural' });
 
+await video.highlight(selector); // ring an element; moves, never stacks
+await video.highlight(selector, { color: '#4ade80', durationMs: 1500 });
+await video.clearHighlight();
+
 await video.cursor.moveTo(selector); // interpolated, never teleported
 await video.cursor.click();
 await video.cursor.hide();
@@ -176,6 +180,12 @@ await video.dispose();
 **Prefer state waits over sleeps.** A `pause` is for letting a viewer read something; a
 `waitForSelector` is for waiting for the application. The framework enforces this distinction in
 the API so the two are never confused.
+
+**Highlighting tracks the element.** A ring is positioned from live layout every frame, not from
+where the element was when you highlighted it, so it stays on target through scrolling and reflow.
+Its fade is sampled in Node rather than animated by a CSS transition, so it is frame-exact like
+everything else — two runs fade identically. Only one highlight is up at a time; calling
+`highlight()` again moves the ring.
 
 **Natural typing never introduces typos.** It varies inter-key timing and occasionally pauses
 mid-thought. A "natural" mode that types a wrong character is worse than an even one, because the
@@ -208,6 +218,8 @@ configuration, not engine code.
 - [`examples/basic`](examples/basic) — the smallest complete script
 - [`examples/vertical`](examples/vertical) — a full vertical product demo
 - [`examples/natural-input`](examples/natural-input) — natural typing, scrolling and cursor work
+- [`examples/highlight`](examples/highlight) — pointing the viewer at a value, with and without
+  the cursor
 
 ## Security
 
