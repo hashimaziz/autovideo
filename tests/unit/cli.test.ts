@@ -191,3 +191,35 @@ describe('short options', () => {
     expect(parseArgs(['-5']).positionals).toEqual(['-5']);
   });
 });
+
+describe('script loading', () => {
+  it('accepts a self-driving script with no default export', async () => {
+    // A script that builds its own session with createVideo() and calls export() has already run
+    // by the time it is imported, thanks to top-level await. Refusing to load it would mean the
+    // CLI only served one of the two ordinary ways to write a video script — and the plan's own
+    // example uses the style this rejects.
+    const { loadScriptForTest } = await import('../../src/cli/script-runner.js');
+    const entry = await loadScriptForTest(
+      new URL('../../examples/vertical/vertical-demo.ts', import.meta.url).pathname,
+    );
+
+    expect(typeof entry).toBe('function');
+  });
+
+  it('installs and restores a createVideo override', async () => {
+    // The mechanism that lets `inspect` walk a self-driving script without launching a browser.
+    const { setVideoFactory } = await import('../../src/video/index.js');
+
+    const recorder = { marker: 'replaced' };
+    const restore = setVideoFactory(async () => recorder as never);
+    const { createVideo } = await import('../../src/video/index.js');
+
+    expect(await createVideo({ viewport: 'vertical' })).toBe(recorder as never);
+
+    restore();
+    // Restored: this creates a real session, so it is disposed immediately.
+    const real = await createVideo({ viewport: 'vertical', headless: true } as never);
+    expect(real).not.toBe(recorder as never);
+    await (real as unknown as { dispose(): Promise<void> }).dispose();
+  }, 120_000);
+});

@@ -13,7 +13,8 @@
 
 import { writeFile } from 'node:fs/promises';
 
-import { createVideo } from '../video/index.js';
+import { createVideo, setVideoFactory } from '../video/index.js';
+import type { VideoConfigInput } from '../config/config.js';
 import { VideoRenderError } from '../runtime/render-error.js';
 
 const mode = (process.env.AUTOVIDEO_MODE ?? 'render') as 'render' | 'inspect';
@@ -41,19 +42,25 @@ function readConfig() {
 }
 
 /**
- * Locate the user's script.
+ * Load the user's script.
  *
- * The conventional shape is a default export that takes the API. A default export taking no
- * arguments is also accepted, so a script can `import { createVideo }` itself.
+ * Two styles are supported, and both are ordinary:
+ *
+ * - `export default async (video) => { … }` — the runner passes the API in.
+ * - Top-level statements that build their own session with `createVideo()` and call
+ *   `video.export()` themselves. Importing such a module *is* running it, because of its
+ *   top-level await, so there is nothing left to invoke.
+ *
+ * Returning a no-op for the second style is what lets one CLI serve both. If someone forgets the
+ * default export and writes the first style, inspection comes back empty and says so, which is a
+ * far better failure than refusing to load their file.
  */
 async function loadScript(path: string): Promise<ScriptEntry> {
   const module = (await import(path)) as { default?: unknown };
 
   if (typeof module.default !== 'function') {
-    throw new Error(
-      `${path} must have a default export that is a function, e.g. ` +
-        `\`export default async (video) => { ... }\`.`,
-    );
+    // Top-level await already ran the script.
+    return async () => undefined;
   }
 
   return module.default as ScriptEntry;
@@ -68,6 +75,11 @@ async function loadScript(path: string): Promise<ScriptEntry> {
  */
 type ScriptEntry = (api?: unknown) => Promise<unknown>;
 
+/** Exposed for the unit suite. Wraps the private loader without exposing its internals. */
+export async function loadScriptForTest(path: string): Promise<ScriptEntry> {
+  return loadScript(path);
+}
+
 async function main(): Promise<number> {
   const scriptPath = process.argv[2];
   if (!scriptPath) {
@@ -76,16 +88,19 @@ async function main(): Promise<number> {
   }
 
   const config = readConfig();
+
+  // Inspection has to be installed *before* the script is imported, because a script is free to
+  // call createVideo() itself — the shape the plan's own example uses — and would otherwise launch
+  // a browser. With the factory overridden, both script styles walk without rendering.
+  const inspection = mode === 'inspect' ? await prepareInspection(config) : undefined;
+
   const run = await loadScript(scriptPath);
 
-  if (mode === 'inspect') {
-    // Inspecting runs the script with a recording object that records instead of rendering, so
-    // the browser is never launched. That keeps `autovideo inspect` fast and side-effect free,
-    // which is what makes it useful for checking a script's structure.
-    const { createInspectionRecorder, printInspection } = await import('./inspect.js');
-    const recorder = createInspectionRecorder(config);
-    await run(recorder.video);
-    printInspection(recorder.actions, config);
+  if (inspection) {
+    // A script written as `export default async (video) => {}` receives the recorder directly.
+    // One that builds its own session has already populated the same recorder via the factory.
+    await run(inspection.recorder.video);
+    inspection.print();
     return 0;
   }
 
@@ -125,6 +140,35 @@ async function main(): Promise<number> {
     await video.dispose();
     return 1;
   }
+}
+
+/**
+ * Prepare inspection: swap in a recording factory and silence the script's own output.
+ *
+ * Scripts end with `console.log('Rendered …')`, which is noise in an inspection whose whole
+ * purpose is to list operations rather than claim a video was produced.
+ */
+async function prepareInspection(config: VideoConfigInput) {
+  const { createInspectionRecorder, printInspection } = await import('./inspect.js');
+  const recorder = createInspectionRecorder(config);
+
+  setVideoFactory(async (input) => {
+    // The script's own config wins where it supplies one; CLI flags fill the rest.
+    const merged = createInspectionRecorder({ ...config, ...input });
+    recorder.actions.push(...merged.actions);
+    return recorder.video as never;
+  });
+
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+
+  return {
+    recorder,
+    print(): void {
+      process.stdout.write = write as typeof process.stdout.write;
+      printInspection(recorder.actions, config);
+    },
+  };
 }
 
 /** Print a failure in the form the user can act on. */

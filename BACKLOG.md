@@ -112,15 +112,44 @@ running it.
 
 ---
 
-## P4 — Port the the application workflow
+## ~~P4 — Port the the application workflow~~ DONE (selectors verified; render needs credentials)
 
-Plan §39 step 11 and §40's "the application-specific assumptions are not required by the framework".
-Not started. The audit identified exactly what is generic (scroll-container detection, landing
-verification, the run-failure contract, the manifest) and what must be rewritten (all selectors,
-templates, Recharts-specific waits, Google OAuth). This is the test of whether the framework is
-genuinely reusable rather than merely refactored.
+**Status:** ported to `a worked example/`. All 22 selectors verified against the app's
+source. A real render needs a running app, live market data and a signed-in session, none of
+which exist in this environment — so the port is verified structurally rather than by producing
+a video.
 
----
+### What the port proves
+
+The framework has **no the application knowledge in it**. Every test id, indicator name and route
+lives in `a worked example/selectors.ts`, which imports nothing from `autovideo`. That file is
+the only thing that would change to retarget the script.
+
+What the original did by hand and the port now gets for free:
+
+| original                                                         | port                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------- |
+| `mouse.move()` before every click, hoping a screencast caught it | `cursor.moveTo` — composited and interpolated           |
+| `centerOn` + a hand-rolled easing loop                           | `scrollTo(sel, { behavior: 'natural' })`                |
+| `settle(page, 'long')` — a 1300ms `setTimeout`                   | `pause(1300)` — exactly 39 frames at 30fps, any machine |
+| manual screenshot + page HTML on failure                         | screenshot, trace, console, network, manifest           |
+| `PRIVACY_CSS` hardcoded into the engine                          | `browser.extraCss` in the script                        |
+| a persistent Chrome profile holding live session cookies         | `storageState`; contents never read                     |
+
+### How it is verified
+
+`a worked example/verify-selectors.mjs` reads every `.tsx` in the app and asserts each
+selector the port uses still exists. A renamed `data-testid` fails there rather than three scenes
+into a fifteen-minute render. All 22 pass.
+
+`autovideo inspect a worked example/stock-overview.ts` walks it — 56 operations, 6 scenes,
+~26.6s — without launching a browser.
+
+### Still open
+
+Rendering it for real needs `PRODUCT_URL`, market data and a `storageState` file. Worth doing
+once by hand against the dev server; the remaining five templates (`why_stock_down`, `technical_
+analysis`, `trendline`, `indicator_explainer`, `stock_vs_market`) would follow the same shape.
 
 ## P5 — Element highlighting
 

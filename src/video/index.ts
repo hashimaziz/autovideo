@@ -173,6 +173,27 @@ export interface Video {
 }
 
 /**
+ * Replaces what {@link createVideo} returns.
+ *
+ * Set by the CLI's `inspect` command so that a script which builds its own session — the shape
+ * the plan's own example uses — can be walked without launching a browser. Without this, `inspect`
+ * only works for scripts written as `export default async (video) => {}`, and the other perfectly
+ * ordinary style fails by trying to render for real.
+ *
+ * Internal: not part of the public API, and not covered by the compatibility promise.
+ */
+let factoryOverride: ((input: VideoConfigInput) => Promise<Video>) | undefined;
+
+/** Install a replacement for {@link createVideo}. Returns a function that restores the original. */
+export function setVideoFactory(override: (input: VideoConfigInput) => Promise<Video>): () => void {
+  const previous = factoryOverride;
+  factoryOverride = override;
+  return () => {
+    factoryOverride = previous;
+  };
+}
+
+/**
  * Create a video session.
  *
  * The browser is launched and the frame pump started immediately, so the clock begins at the
@@ -183,6 +204,10 @@ export interface Video {
  * @throws {VideoBrowserError} if Chromium cannot launch.
  */
 export async function createVideo(input: VideoConfigInput = {}): Promise<Video> {
+  // Honour an installed override before doing anything else, so inspecting a script never
+  // launches a browser.
+  if (factoryOverride) return factoryOverride(input);
+
   const config = resolveConfig(input);
 
   const clock = new LogicalClock();
