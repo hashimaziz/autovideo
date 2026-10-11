@@ -35,6 +35,7 @@
 
 import type { CDPSession, Page } from 'playwright';
 
+import type { PageGate } from '../browser/page-gate.js';
 import type { VideoConfig } from '../config/config.js';
 import type { Encoder } from '../recorder/encoder.js';
 import { VideoRecorderError } from '../runtime/errors.js';
@@ -46,10 +47,11 @@ import { timeForFrame } from '../config/config.js';
 export type ApplyFrame = (frameIndex: number, atMs: number) => Promise<void>;
 
 /**
- * Sentinel distinguishing "the capture timed out" from a real frame, which is a Buffer.
- * A distinct symbol rather than `null`, so a null frame and a timed-out capture stay separable.
+ * Sentinel distinguishing "the work timed out" from a real result.
+ * A distinct symbol rather than `null`, so a skipped frame and a timed-out one stay separable.
  */
 const CAPTURE_TIMED_OUT = Symbol('capture-timed-out');
+const FRAME_TIMED_OUT = Symbol('frame-timed-out');
 
 /**
  * How long a single capture may take before it is treated as stuck.
@@ -57,7 +59,30 @@ const CAPTURE_TIMED_OUT = Symbol('capture-timed-out');
  * Captures normally take ~16ms — one compositor frame. Navigation takes 100-500ms and is skipped
  * by event rather than waited on, so anything past this bound is a capture that will not return.
  */
-const CAPTURE_TIMEOUT_MS = 3_000;
+const CAPTURE_TIMEOUT_MS = 5_000;
+
+/**
+ * How long a navigation may go without settling before frames are captured anyway.
+ *
+ * Generous — a slow app can take seconds — but bounded, because some navigations never emit a
+ * load event at all and the pump would otherwise emit nothing until the clock's stall guard
+ * fired thirty seconds later.
+ */
+const NAVIGATION_GRACE_MS = 8_000;
+
+/**
+ * How long one frame's page work may take before it is abandoned.
+ *
+ * Every CDP and page call can hang rather than fail — during navigation, and occasionally for
+ * reasons of Playwright's own scheduling. Without a bound, one stuck frame stalls the whole
+ * render and every pending action waits out the clock's stall guard, producing a 30-second
+ * mystery error that points at the pump rather than at the call that hung.
+ *
+ * A timed-out frame is *dropped*, not fatal: logical time does not advance for it, so the video
+ * loses one frame of a single frame's duration and remains fully deterministic. Dropping a frame
+ * is a far better outcome than failing a render over a transient scheduling hiccup.
+ */
+const FRAME_TIMEOUT_MS = 5_000;
 
 /**
  * Hand control back to the event loop.
@@ -66,8 +91,7 @@ const CAPTURE_TIMEOUT_MS = 3_000;
  */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
-    const handle = setImmediate(resolve);
-    handle.unref?.();
+    setImmediate(resolve);
   });
 }
 
@@ -81,6 +105,14 @@ export interface FramePumpOptions {
   applyFrame?: ApplyFrame;
   /** Receives every frame, for frame dumping and live progress. */
   onFrame?: (frameIndex: number, atMs: number) => void;
+  /**
+   * Serialises page access against the script's own actions.
+   *
+   * Without it, a navigation started by the script can begin *while* the pump is inside a page
+   * call, and every CDP call hangs rather than fails until the clock's stall guard fires. See
+   * {@link PageGate}.
+   */
+  gate?: PageGate;
 }
 
 export interface FramePumpStats {
@@ -108,28 +140,78 @@ export class FramePump {
   #framesWritten = 0;
   #startedAtMs = 0;
 
+  /** True when stop() was called deliberately, rather than the loop exiting unexpectedly. */
+  #stoppedCleanly = false;
+
   /**
    * True between a main-frame navigation starting and its document settling.
    *
    * Capture during that window hangs forever — measured, not assumed — so it must be detected
-   * rather than waited on.
+   * rather than waited on. Bounded by {@link NAVIGATION_GRACE_MS} because a navigation that
+   * *never* settles (an unreachable host ends on chrome-error:// and fires no load event) would
+   * otherwise leave the flag set and stall the pump indefinitely.
    */
-  #navigationInFlight = false;
+  #navigationSettled: Promise<void> | undefined;
+
+  #resolveNavigation: (() => void) | undefined;
 
   constructor(options: FramePumpOptions) {
     this.#options = options;
 
     const { page } = options;
+
     page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) this.#navigationInFlight = true;
+      // Only the main frame matters. A subframe navigating during capture would hang it just as
+      // thoroughly, so every frame navigation starts a new wait.
+      if (frame !== page.mainFrame()) return;
+      this.#beginNavigation();
     });
-    // Both of these mean the new document is present and settled.
-    page.on('domcontentloaded', () => {
-      this.#navigationInFlight = false;
+
+    // Either event means the new document is present and settled.
+    const settle = (): void => this.#endNavigation();
+    page.on('domcontentloaded', settle);
+    page.on('load', settle);
+  }
+
+  /** Record that a navigation has started. */
+  #beginNavigation(): void {
+    // A second navigation supersedes the first; the old resolver is dropped so nothing leaks.
+    this.#resolveNavigation?.();
+    this.#navigationSettled = new Promise<void>((resolve) => {
+      this.#resolveNavigation = resolve;
     });
-    page.on('load', () => {
-      this.#navigationInFlight = false;
+  }
+
+  /** Record that the document has settled. */
+  #endNavigation(): void {
+    this.#resolveNavigation?.();
+    this.#resolveNavigation = undefined;
+    this.#navigationSettled = undefined;
+  }
+
+  /**
+   * Wait until the page is safe to touch.
+   *
+   * Event-driven rather than polled. An earlier version re-checked a flag and yielded on every
+   * iteration, which is both wasteful and — because the yield was the only thing scheduled —
+   * able to stall indefinitely on a page that never settled.
+   *
+   * Bounded by {@link NAVIGATION_GRACE_MS}: an unreachable host ends on chrome-error:// and
+   * fires no load event at all, so without a bound the pump would wait forever while the action
+   * that triggered the navigation times out underneath it.
+   */
+  async #awaitNavigationSettled(): Promise<void> {
+    const settled = this.#navigationSettled;
+    if (!settled) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, NAVIGATION_GRACE_MS);
     });
+
+    await Promise.race([settled, grace]);
+    if (timer) clearTimeout(timer);
+    this.#endNavigation();
   }
 
   /** Frames successfully written so far. */
@@ -149,7 +231,7 @@ export class FramePump {
    * is the caller's business and arrives through `stop()`, not through here.
    */
   async run(): Promise<void> {
-    const { page, clock, encoder, config, applyFrame, onFrame } = this.#options;
+    const { page, clock, encoder, config, applyFrame, onFrame, gate } = this.#options;
     const cdp = await page.context().newCDPSession(page);
 
     this.#running = true;
@@ -161,37 +243,73 @@ export class FramePump {
       let frameIndex = 0;
 
       while (!this.#stopped) {
+        // Navigation is handled *before* anything touches the page. Every CDP and page call —
+        // capture, `page.evaluate`, style injection — hangs rather than fails while a
+        // navigation is in flight, so the whole iteration waits. Checking only the capture is
+        // not enough: applyFrame issues page calls of its own.
+        await this.#awaitNavigationSettled();
+
         const atMs = timeForFrame(frameIndex, config.fps);
 
-        if (applyFrame) {
-          await applyFrame(frameIndex, atMs);
+        // Applying motion and capturing both touch the page, so they happen together under the
+        // gate. Writing to the encoder deliberately stays outside it: ffmpeg is not the page,
+        // and holding the gate during an encode would stall the script for no reason.
+        const renderFrame = async (): Promise<Buffer | null> => {
+          if (applyFrame) await applyFrame(frameIndex, atMs);
+          return this.#captureOrSkip(page, capture);
+        };
+
+        // The gate is acquired with a deadline and released by *this* frame's `finally`.
+        // Wrapping the frame in `gate.withLock` and abandoning it on timeout leaks the gate
+        // permanently, because the release lives in the abandoned promise's `finally`.
+        let holdingGate = false;
+        if (gate) {
+          holdingGate = await gate.tryAcquire(FRAME_TIMEOUT_MS);
+          if (!holdingGate) {
+            // Could not get the page within the deadline. Skip rather than stall.
+            await yieldToEventLoop();
+            continue;
+          }
         }
 
-        // Capturing while a navigation is in flight does not fail — it *hangs forever*, which
-        // was measured, not assumed. So navigations are detected up front and the frame is
-        // skipped, with a bounded race as a backstop for anything the events miss.
-        if (this.#navigationInFlight) {
-          // Yield to the event loop. Without this the skip path is a tight synchronous loop,
-          // which starves the very navigation we are waiting on: `load` never fires, the flag
-          // never clears, and the pump spins forever. That livelock presents as a render that
-          // simply stops after one or two frames.
-          await yieldToEventLoop();
-          continue;
+        let frame: Buffer | null;
+        try {
+          frame = await this.#withDeadline(renderFrame());
+        } finally {
+          if (holdingGate) gate?.release();
         }
-
-        const frame = await this.#captureOrSkip(page, capture);
 
         if (frame === null) {
           // Skipped. Logical time deliberately does *not* advance: the frame index is the
           // definition of time, so a frame that was not captured must not consume one. If it
           // did, the video's length would depend on how long each navigation happened to take,
           // which is exactly the machine-dependence this design exists to remove.
+          // Yield rather than spin: a skipped frame means no page work happened, so give the
+          // event loop a turn to finish whatever caused it.
           await yieldToEventLoop();
           continue;
         }
 
         clock.advanceTo(timeForFrame(frameIndex, config.fps));
-        await encoder.write(frame);
+
+        // Raced against the encoder's own exit.
+        //
+        // `write` resolves via a `drain` event when ffmpeg's stdin buffer fills. If ffmpeg has
+        // died — or stopped consuming — that event never fires and the pump waits forever with
+        // no error and no frames. Racing against `done` turns an unkillable hang into an
+        // immediate, accurate failure.
+        await Promise.race([
+          encoder.write(frame),
+          encoder.done.then(() => {
+            throw new VideoRecorderError(
+              `The encoder exited after ${this.#framesWritten} frames.`,
+              {
+                hint: 'ffmpeg stopped consuming frames. Check the encoder log and the capture size.',
+              },
+            );
+          }),
+        ]);
+
         this.#framesWritten++;
         onFrame?.(frameIndex, atMs);
 
@@ -202,6 +320,14 @@ export class FramePump {
         clock.advanceTo(timeForFrame(frameIndex + 1, config.fps));
 
         frameIndex++;
+      }
+
+      // The loop ending means no more frames will ever be produced. Anything still awaiting a
+      // logical deadline must be failed *now*: left alone it waits out the clock's stall guard
+      // for 30 seconds and then reports "no frames were produced", which points at the pump
+      // rather than at whatever actually stopped it.
+      if (!this.#stoppedCleanly) {
+        clock.rejectPending('The frame pump stopped while an action was still running.');
       }
 
       await encoder.finish();
@@ -215,6 +341,29 @@ export class FramePump {
     } finally {
       this.#running = false;
       await cdp.detach().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Await `work`, giving up after {@link FRAME_TIMEOUT_MS}.
+   *
+   * Returns null when the work is abandoned. The underlying promise is deliberately left
+   * running rather than cancelled: there is no way to cancel a CDP call in flight, and it will
+   * settle once the page is responsive again. Its failure is absorbed so it cannot resurface
+   * later as an unhandled rejection.
+   */
+  async #withDeadline(work: Promise<Buffer | null>): Promise<Buffer | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expiry = new Promise<typeof FRAME_TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(FRAME_TIMED_OUT), FRAME_TIMEOUT_MS);
+    });
+
+    try {
+      const result = await Promise.race([work, expiry]);
+      return result === FRAME_TIMED_OUT ? null : result;
+    } finally {
+      if (timer) clearTimeout(timer);
+      work.catch(() => undefined);
     }
   }
 
@@ -263,8 +412,13 @@ export class FramePump {
     }
   }
 
-  /** Stop after the current frame. */
+  /**
+   * Stop after the current frame.
+   *
+   * Deliberate — called by export() and dispose() when the script is finishing.
+   */
   stop(): void {
+    this.#stoppedCleanly = true;
     this.#stopped = true;
   }
 

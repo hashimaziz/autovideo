@@ -129,8 +129,10 @@ describe('createVideo — end to end', () => {
     const second = await run();
 
     // The pause itself is exactly 1000ms of logical time.
-    expect(first.pauses).toEqual([1000]);
-    expect(second.pauses).toEqual([1000]);
+    // Compared approximately: repeated float addition makes the accumulated logical time
+    // 1000.0000000000001 rather than exactly 1000.
+    expect(first.pauses[0]).toBeCloseTo(1000, 6);
+    expect(second.pauses[0]).toBeCloseTo(1000, 6);
 
     // Frames track logical time exactly — this is the property a wall-clock pump cannot have.
     // A capture that is skipped (during navigation) must not consume a frame index either.

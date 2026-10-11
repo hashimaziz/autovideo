@@ -33,6 +33,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { createActions, type Actions } from '../browser/actions.js';
+import { PageGate } from '../browser/page-gate.js';
 import { assertAppReachable, launchBrowser, type BrowserSession } from '../browser/session.js';
 import { resolveConfig, type VideoConfig, type VideoConfigInput } from '../config/config.js';
 import { createRng, type Rng } from '../seed/rng.js';
@@ -184,6 +185,15 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   const track = new MotionTrack();
   const log = new BrowserLog();
 
+  /**
+   * Serialises the pump's page access against the script's own.
+   *
+   * Navigation takes priority, so a pump that re-acquires the gate between every frame cannot
+   * starve it. Without this the pump deadlocks intermittently — and intermittently is the worst
+   * possible way for a renderer to fail.
+   */
+  const gate = new PageGate();
+
   /** The action currently executing, so a failure can name it. */
   let currentAction: { type: string; target: string | undefined } | undefined;
 
@@ -233,6 +243,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
   let pump: FramePump | undefined;
   let overlay: CursorOverlay | undefined;
   let exported = false;
+  let lastExport: ExportResult | undefined;
   let disposed = false;
   let pumping: Promise<void> | undefined;
 
@@ -277,6 +288,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       track,
       encoder,
       config,
+      gate,
       applyFrame: async (_frameIndex, atMs) => {
         // Sample the track, then paint it. This runs before every capture, which is what makes
         // frame N's contents a function of N alone.
@@ -375,7 +387,9 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
 
       // The real mouse follows too, so hover and hit-testing are genuine browser behaviour even
       // though the viewer is looking at the overlay.
-      await session?.page.mouse.move(x, y).catch(() => undefined);
+      await gate
+        .withLock(() => session?.page.mouse.move(x, y) ?? Promise.resolve())
+        .catch(() => undefined);
 
       await runAnimation(durationMs);
       currentCursor = { x, y };
@@ -389,10 +403,14 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       clickEmphasisUntilMs = clock.now() + config.cursor.clickRippleMs;
 
       for (let press = 0; press < count; press++) {
-        await session?.page.mouse.down().catch(() => undefined);
+        await gate
+          .withLock(() => session?.page.mouse.down() ?? Promise.resolve())
+          .catch(() => undefined);
         // A real click is not instantaneous; ~60ms reads as deliberate without feeling slow.
         await clock.wait(60, 'click');
-        await session?.page.mouse.up().catch(() => undefined);
+        await gate
+          .withLock(() => session?.page.mouse.up() ?? Promise.resolve())
+          .catch(() => undefined);
       }
 
       finish();
@@ -482,7 +500,9 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       await browserActions().focus(selector);
 
       for (const character of characters) {
-        await session?.page.keyboard.type(character).catch(() => undefined);
+        await gate
+          .withLock(() => session?.page.keyboard.type(character) ?? Promise.resolve())
+          .catch(() => undefined);
         const jitter = typingRng.between(-variance, variance);
         const delay = Math.max(8, speed * (1 + jitter));
 
@@ -582,6 +602,12 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     },
 
     async export(destination?: string): Promise<ExportResult> {
+      // Idempotent. A script is free to call export() itself — the documented API in the plan
+      // shows exactly that — and a caller (a CLI, a test) may reasonably call it too. Without
+      // this, the second call throws ENOENT because the scratch file was renamed away by the
+      // first, and the failure surfaces as a broken render rather than as a redundant call.
+      if (exported && lastExport) return lastExport;
+
       const finalPath = destination ? absolute(destination) : outputPath;
       const finish = timeline.begin({ type: 'export', target: finalPath });
 
@@ -613,6 +639,14 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       exported = true;
       finish();
 
+      lastExport = {
+        path: finalPath,
+        frames,
+        durationMs,
+        renderMs: stats?.elapsedMs ?? 0,
+        throughput: stats?.throughput ?? 0,
+      };
+
       // The manifest sits beside the video, not in the debug directory: it is part of the
       // output, not evidence of a failure. Without it two runs cannot be compared after the
       // fact, which is the entire point of recording one.
@@ -622,13 +656,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
         'utf8',
       ).catch(() => undefined);
 
-      return {
-        path: finalPath,
-        frames,
-        durationMs,
-        renderMs: stats?.elapsedMs ?? 0,
-        throughput: stats?.throughput ?? 0,
-      };
+      return lastExport;
     },
 
     manifest(): Record<string, unknown> {
