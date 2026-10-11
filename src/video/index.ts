@@ -455,15 +455,35 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
         await assertAppReachable(url).catch(() => undefined);
       }
 
-      await browserActions().open(url);
-      finish({
-        visibleText: await browserActions()
-          .waitForLoadState('load')
-          .then(() => url),
-      });
+      // Capture is suppressed for the whole navigation, and the gate is taken with priority.
+      //
+      // Both matter. The gate, because every CDP and page call *hangs* rather than fails while a
+      // navigation is in flight, so the pump must not be inside one when goto starts. Priority,
+      // because the pump re-acquires the gate between every frame and would otherwise starve it.
+      //
+      // Suppression matters for reproducibility: it removes the window between goto() being
+      // called and the browser emitting 'framenavigated', and again between 'load' firing and
+      // goto resolving. A frame captured in either window advances logical time by one frame
+      // interval, which was measured shifting every later timestamp in the manifest.
+      pump?.suppressCapture();
+      try {
+        await gate.withLock(() => browserActions().open(url), true);
+      } finally {
+        pump?.resumeCapture();
+      }
+      finish({ visibleText: url });
     },
 
-    reload: () => actions.reload(),
+    async reload(): Promise<void> {
+      const finish = timeline.begin({ type: 'reload' });
+      pump?.suppressCapture();
+      try {
+        await gate.withLock(() => browserActions().reload(), true);
+      } finally {
+        pump?.resumeCapture();
+      }
+      finish();
+    },
 
     async click(selector: string): Promise<void> {
       currentAction = { type: 'click', target: selector };
@@ -473,7 +493,7 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       finish();
     },
 
-    doubleClick: (selector: string) => actions.doubleClick(selector),
+    doubleClick: (selector: string) => cursorApi.clickSelector(selector),
 
     async type(selector: string, text: string, options: TypeOptions = {}): Promise<void> {
       currentAction = { type: 'type', target: selector };

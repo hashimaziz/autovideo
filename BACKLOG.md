@@ -3,85 +3,63 @@
 Known issues and unfinished work, newest first. Each entry says what is observed, what has been
 ruled out, and what the next step is — so nobody has to re-derive it.
 
+Recently resolved items are kept rather than deleted, under a struck-through heading, because the
+_reasoning_ is usually the valuable part and because a future change can reintroduce them.
+
 ---
 
-## P0 — Intermittent frame-pump hang
+## ~~P0 — Intermittent frame-pump hang~~ RESOLVED
 
-**Status:** open. Mitigated but not root-caused.
+**Status:** fixed in `fix(runtime): serialise page access and suppress capture during navigation`.
 
-### Symptom
+**Was:** roughly 1 render in 9 produced no frames for 30 seconds and then failed with
+`Video time stopped advancing ... No frames were produced for 30000ms`. Before the mitigations
+below landed it was closer to 1 in 2.
 
-Running `tests/integration/video.test.ts` repeatedly, roughly **1 run in 9** writes zero or one
-frame and then produces none for 30 seconds, until the clock's stall guard fires:
+### Root cause — three bugs, all in the same area
 
-```
-Video time stopped advancing at 0ms while waiting for 1000ms.
-No frames were produced for 30000ms.
-```
+1. **`PageGate.acquire()` awaited the wrong thing.** `#enqueue` returns
+   `{ promise, waiter, cancel }`, and the code did `await this.#enqueue(priority)` — awaiting a
+   plain object, which resolves on the next microtask. So every queued caller returned
+   immediately believing it held the gate, and **nothing was ever serialised**. The gate was
+   decorative.
 
-A successful run of the same file takes ~70s; a failing one takes ~30s per stalled test. The
-failure rate moved from roughly 1-in-2 to roughly 1-in-9 over the course of the investigation,
-so it is a race, not a deterministic bug.
+2. **Navigation never went through the gate at all.** Several earlier patches to
+   `src/video/index.ts` had silently failed to apply, so `open()` and `reload()` bypassed it
+   entirely. The pump could therefore be inside a `page.evaluate` when `goto()` began — and every
+   CDP call _hangs_ rather than fails during a navigation.
 
-### Established
+3. **Capture ran in the window around a navigation.** Frames captured between `goto()` being
+   called and the browser emitting `framenavigated`, or between `load` firing and `goto`
+   resolving, advanced logical time by one frame interval — shifting every later timestamp.
 
-- `Page.captureScreenshot` does not **fail** during a navigation — it **hangs indefinitely**.
-  Measured directly with a `Promise.race`, not inferred.
-- `page.evaluate` has the same exposure, via the same underlying reason.
-- The pump and the user's script drive the same page concurrently, so `open()` can begin a
-  navigation while the pump is already inside a page call. Checking for an in-flight navigation
-  _before_ each call is not sufficient: the navigation can start _during_ the call.
+### Fixes
 
-### Mitigations already in place
+- `await this.#enqueue(priority).promise`
+- `open()` and `reload()` take the gate with priority, and suppress capture for the whole
+  navigation
+- The pump skips the pre-navigation blank page entirely. `Page.captureScreenshot` _succeeds_ on
+  `about:blank` and returns a small white image, so a URL check after a failure never fired and
+  frame 0 was written or not depending on who won the race
+- A frame whose `stop()` lands mid-capture is dropped rather than written, which is what made
+  `pause(1000)` at 30fps emit 31 frames
 
-| Change                                           | Effect                                               |
-| ------------------------------------------------ | ---------------------------------------------------- |
-| Event-driven `#awaitNavigationSettled()`         | No page calls during a known navigation              |
-| `PageGate` with navigation priority              | Serialises page access between pump and script       |
-| Per-frame deadline (`FRAME_TIMEOUT_MS`)          | A stuck frame is dropped, not fatal                  |
-| `encoder.write()` raced against `encoder.done`   | An encoder that stops consuming cannot hang the pump |
-| Pump loop exit rejects pending waits immediately | No 30s mystery hang                                  |
+### Verified
 
-Dropping a timed-out frame is deterministic by construction: logical time does not advance for a
-frame that was not captured, so the video loses one frame of duration and nothing else.
+- `video.test.ts` + `determinism.test.ts`, 14 consecutive full runs: **0 failures**
+- Two renders of the same script produce identical scenes, actions, targets and pause durations
+- All 15 `PageGate` unit tests pass, including priority, cancellation and ghost-owner cases
 
-### PageGate is defective — fix or remove it first
+### What is still not guaranteed, by design
 
-A full unit suite for `PageGate` was written and **all hand-off behaviour fails**:
-one `release()` resolves **two** waiters, priority is not honoured, and
-`withLock` does not serialise concurrent bodies.
+Absolute timestamps and action durations derived from them. An action that waits on the
+application — `waitForSelector`, a `click` that triggers a load — takes as long as the app takes,
+and the video shows that wait rather than pretending it did not happen. Measured variation across
+runs of such a script: up to 333ms, ten frames.
 
-`release()` splices exactly one waiter and resolves exactly one promise, so
-the observed behaviour cannot be explained by the code as written. Either the
-queue is being mutated somewhere unaccounted for, or the promise-per-waiter
-wiring in `#enqueue` is not what it appears to be. **This was not resolved.**
-
-The tests were removed rather than committed red. The implementation is still
-in the render path, because it measurably reduces the failure rate — but it
-should be treated as untrusted: it under-serialises, which means two holders
-can hold the gate at once and the mutual exclusion it was written to provide
-does not actually hold.
-
-**Do not build on `PageGate` until it is fixed.** Either correct it with the
-unit suite restored, or remove it and re-measure the failure rate without it.
-
-### Next steps
-
-1. **Rewrite `PageGate` from scratch against a unit suite**, committed alongside it. The
-   simplest correct version is a promise chain rather than an explicit queue:
-   each acquirer awaits the previous holder's release promise, and a timed-out
-   acquirer simply stops awaiting. That removes the entire class of "cancelled
-   waiter became a ghost owner" bug rather than patching around it.
-2. **Instrument for a hang, properly.** Ad-hoc `process.stderr.write` misled me: stderr to a pipe
-   is asynchronous in Node and reorders lines. Use `fs.writeSync` to a file, or wrap the pending
-   operation in a `Promise.race` that records where it is still awaiting after N seconds.
-3. Re-run `video.test.ts` in a loop (10+ iterations) to confirm the rate moved.
-
-### Note on the flakiness being intermittent
-
-Do not "fix" this by making a test skip the affected path. A test that passes because it avoided
-a race is exactly the failure mode this project has been careful to reject elsewhere — two green
-tests were already found passing for the wrong reason during Phase 1.
+Explicit pauses _are_ exact, because they wait on logical time: `pause(1000)` at 30fps is 30
+frames on every run. That is the sharp part of the guarantee, and it is what the determinism suite
+asserts.
 
 ---
 

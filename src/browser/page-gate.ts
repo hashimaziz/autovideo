@@ -51,7 +51,11 @@ export class PageGate {
       this.#held = true;
       return;
     }
-    await this.#enqueue(priority);
+
+    // Await the *promise*, not the handle. `#enqueue` returns `{ promise, waiter, cancel }`,
+    // and awaiting that object resolves on the next microtask — so every queued caller would
+    // return immediately and believe it held the gate. Nothing would ever be serialised.
+    await this.#enqueue(priority).promise;
   }
 
   /**

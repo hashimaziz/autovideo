@@ -49,6 +49,13 @@ async function withPump(
   });
 
   const session = await launchBrowser(config);
+
+  // Navigate before pumping. The pump deliberately refuses to capture the pre-navigation blank
+  // page — `Page.captureScreenshot` succeeds on about:blank and returns a small white image, so
+  // without this the harness would race the script for the first frame.
+  const server = await createFixtureServer();
+  await session.page.goto(server.url('/'));
+
   const clock = new LogicalClock();
   const track = new MotionTrack();
   const frames: Buffer[] = [];
@@ -97,6 +104,7 @@ async function withPump(
   await pumping;
   await encoder.finish();
   await session.close();
+  await server.close();
 
   return { pump, clock, encoder, session, frames };
 }

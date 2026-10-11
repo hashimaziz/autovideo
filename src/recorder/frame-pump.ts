@@ -71,6 +71,14 @@ const CAPTURE_TIMEOUT_MS = 5_000;
 const NAVIGATION_GRACE_MS = 8_000;
 
 /**
+ * How long the pump will wait for `resumeCapture()` before carrying on regardless.
+ *
+ * A safety net, not the normal path: if a navigation somehow never calls resume, the render
+ * should continue without capture rather than hang until the clock's stall guard fires.
+ */
+const SUPPRESS_GRACE_MS = 30_000;
+
+/**
  * How long one frame's page work may take before it is abandoned.
  *
  * Every CDP and page call can hang rather than fail — during navigation, and occasionally for
@@ -83,6 +91,12 @@ const NAVIGATION_GRACE_MS = 8_000;
  * is a far better outcome than failing a render over a transient scheduling hiccup.
  */
 const FRAME_TIMEOUT_MS = 5_000;
+
+/** Whether the page is still the pre-navigation blank document. */
+function isBlankDocument(page: Page): boolean {
+  const url = page.url();
+  return url === 'about:blank' || url === '';
+}
 
 /**
  * Hand control back to the event loop.
@@ -142,6 +156,63 @@ export class FramePump {
 
   /** True when stop() was called deliberately, rather than the loop exiting unexpectedly. */
   #stoppedCleanly = false;
+
+  /**
+   * Set while the script is performing a navigation it initiated.
+   *
+   * Without this there is a window between `goto()` being called and the browser emitting
+   * `framenavigated` — and another between `load` firing and `goto` resolving. A frame captured
+   * in either window advances logical time by one frame interval, so two runs of the same
+   * script shift every subsequent timestamp by a whole frame.
+   *
+   * That was measured: two runs of an identical script differed by exactly one frame, with all
+   * durations identical and every later start offset shifted by 33.3ms. Suppressing capture for
+   * the whole navigation removes the window entirely and makes the timeline reproducible.
+   */
+  #suppressed = false;
+
+  /** Resolved when {@link FramePump.resumeCapture} is called. */
+  #resumed: Promise<void> | undefined;
+
+  #resolveResumed: (() => void) | undefined;
+
+  /**
+   * Stop capturing until {@link FramePump.resumeCapture}.
+   *
+   * The frame loop waits on a promise rather than polling the flag. Polling it with a
+   * `setImmediate` loop looks harmless and is not: it starves the event loop's poll phase, so
+   * Playwright's transport never gets a turn, `goto` never completes, and the render hangs with
+   * a clock stall rather than a navigation error. Waiting is both cheaper and correct.
+   */
+  suppressCapture(): void {
+    if (this.#suppressed) return;
+    this.#suppressed = true;
+    this.#resumed = new Promise<void>((resolve) => {
+      this.#resolveResumed = resolve;
+    });
+  }
+
+  /** Resume capturing. Safe to call when not suppressed. */
+  resumeCapture(): void {
+    this.#suppressed = false;
+    this.#resolveResumed?.();
+    this.#resolveResumed = undefined;
+    this.#resumed = undefined;
+  }
+
+  /** Wait until capture is unsuppressed, bounded so a lost resume cannot stall the render. */
+  async #awaitResumed(): Promise<void> {
+    const resumed = this.#resumed;
+    if (!resumed) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grace = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SUPPRESS_GRACE_MS);
+    });
+
+    await Promise.race([resumed, grace]);
+    if (timer) clearTimeout(timer);
+  }
 
   /**
    * True between a main-frame navigation starting and its document settling.
@@ -249,6 +320,11 @@ export class FramePump {
         // not enough: applyFrame issues page calls of its own.
         await this.#awaitNavigationSettled();
 
+        // A script-initiated navigation suppresses capture for its whole duration. The frame is
+        // not merely skipped after the fact — logical time does not advance at all, so nothing
+        // downstream shifts.
+        await this.#awaitResumed();
+
         const atMs = timeForFrame(frameIndex, config.fps);
 
         // Applying motion and capturing both touch the page, so they happen together under the
@@ -277,6 +353,29 @@ export class FramePump {
           frame = await this.#withDeadline(renderFrame());
         } finally {
           if (holdingGate) gate?.release();
+        }
+
+        // If stop() landed while this frame was being captured, do not write it. Without this
+        // the count overshoots by one: the loop is awaiting a capture when the caller stops it,
+        // so the frame it was already working on gets written anyway. That is how
+        // `pause(1000)` at 30fps came to emit 31 frames.
+        //
+        if (this.#stopped && frameIndex > 0) {
+          continue;
+        }
+
+        // Never capture the pre-navigation blank page.
+        //
+        // `Page.captureScreenshot` *succeeds* on about:blank — it returns a small white image —
+        // so the URL check inside `#captureOrSkip` never fires and the frame gets written. Whether
+        // the pump wins the race against the script's first `open()` call then decides whether the
+        // video begins with one extra frame, which is a coin flip rather than a decision.
+        //
+        // Skipping it outright makes the start deterministic: frame 0 is always the application's
+        // first paint.
+        if (frameIndex === 0 && isBlankDocument(page)) {
+          await yieldToEventLoop();
+          continue;
         }
 
         if (frame === null) {
