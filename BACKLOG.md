@@ -190,8 +190,33 @@ swallowed by the surrounding `.catch()` that exists to tolerate a destroyed exec
 the ring silently never appeared and every test failed with a bare `false`. Interpolated values
 crossing into page context are quoted whole, and the comments there say why.
 
-## P6 — Parallel rendering
+## ~~P6 — Parallel rendering~~ DONE (a real bug, not a scheduling change)
 
-Plan §2 P1.10 and §27. Each render is already independent — own scratch directory, own output
-path, own debug stamp — so this should be a scheduling change rather than a design change.
-Untested at present: nothing in the suite runs two renders concurrently.
+The note here called it "a scheduling change rather than a design change". That was optimistic, and
+the way it was found was by running three renders at once rather than by reading the code.
+
+Each render did have its own scratch _file_ — named from the pid and a timestamp, so no two files
+collided. But they shared a scratch _directory_, `<outputDir>/.scratch`, and cleanup removed that
+directory **recursively**. So a run that finished first deleted the in-flight scratch file of a run
+that had not, and the second died at the final rename:
+
+    ENOENT: no such file or directory, rename '.../.scratch/render-11828-...mp4' -> '.../p3.mp4'
+
+which names neither the cause nor the run that caused it. Three parallel renders failed roughly
+half the time, depending on which finished first.
+
+Each run now takes its own `mkdtemp` directory beneath the shared root, so cleanup can only ever
+remove its own. The root is created before `mkdtemp`, which needs it to exist.
+
+### Verified
+
+Five integration tests, all with runs genuinely overlapping in one output directory:
+
+- three concurrent renders all produce files, and nothing else appears;
+- two concurrent renders agree on frames and duration — concurrency must not leak into the output;
+- the per-run scratch directories are gone afterwards, so a long batch cannot fill the disk;
+- each run's manifest stays separate;
+- **one concurrent run failing still leaves its neighbours' output intact** — the case the old
+  recursive delete made worst, since a failure path cleans up too.
+
+303 unit tests, 142 integration tests.

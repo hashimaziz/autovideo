@@ -29,7 +29,7 @@
  * is renamed into place only after everything has succeeded.
  */
 
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { createActions, type Actions } from '../browser/actions.js';
@@ -281,13 +281,23 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
     ? config.output
     : resolve(process.cwd(), config.output);
   // Scratch inside the run directory, so the rename onto the final path is same-filesystem.
-  const scratchDir = resolve(outputDir, '.scratch');
-  const scratchVideo = resolve(scratchDir, `render-${process.pid}-${Date.now()}.mp4`);
-  /** Where Chromium writes screencast segments, before they are flushed and converted. */
-  const rawScreencastDir = resolve(scratchDir, 'screencast');
+  //
+  // The scratch root is *shared* between runs writing to the same output directory, but each run
+  // gets its own subdirectory under it. This matters: cleanup removes the whole run directory
+  // recursively, so a shared one meant a finishing render deleted the in-flight scratch file of a
+  // concurrent one and the second run failed at the final rename with a bare ENOENT. Rendering
+  // three videos in parallel is an ordinary thing to want, and it used to fail about half the
+  // time depending on which finished first.
+  const scratchRoot = resolve(outputDir, '.scratch');
 
   await mkdir(dirname(outputPath), { recursive: true });
-  await mkdir(scratchDir, { recursive: true });
+  // The root has to exist before mkdtemp can create a unique child beneath it.
+  await mkdir(scratchRoot, { recursive: true });
+
+  const scratchDir = await mkdtemp(resolve(scratchRoot, 'run-'));
+  const scratchVideo = resolve(scratchDir, 'render.mp4');
+  /** Where Chromium writes screencast segments, before they are flushed and converted. */
+  const rawScreencastDir = resolve(scratchDir, 'screencast');
 
   let session: BrowserSession | undefined;
   let actions: Actions | undefined;
@@ -337,7 +347,6 @@ export async function createVideo(input: VideoConfigInput = {}): Promise<Video> 
       config,
       useScreencast ? { recordVideo: { dir: rawScreencastDir, size: config.viewport.output } } : {},
     );
-    await mkdir(scratchDir, { recursive: true });
     if (useScreencast) await mkdir(rawScreencastDir, { recursive: true });
 
     log.attach(session.page);

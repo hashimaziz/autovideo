@@ -191,6 +191,15 @@ everything else — two runs fade identically. Only one highlight is up at a tim
 mid-thought. A "natural" mode that types a wrong character is worse than an even one, because the
 viewer sees a mistake the application never made.
 
+## Several videos at once
+
+```ts
+await Promise.all(['aapl', 'msft', 'nvda'].map((t) => renderScript(t)));
+```
+
+Renders are independent and safe to run concurrently, including into the same output directory:
+each takes its own scratch space and its own debug stamp.
+
 ## Authenticated apps
 
 ```ts
