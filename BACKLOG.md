@@ -220,3 +220,30 @@ Five integration tests, all with runs genuinely overlapping in one output direct
   recursive delete made worst, since a failure path cleans up too.
 
 303 unit tests, 142 integration tests.
+
+## P7 — Suppressing elements by name
+
+Plan §2 P1.4. Today the only way to keep personal data out of a video is `browser.extraCss`, which
+takes a raw selector. That works, but it puts the knowledge in the wrong place: the caller has to
+know a CSS selector for the thing they want hidden, which means reading the app's markup to find
+out what it calls the user's email.
+
+The ask: a `setup()` that takes plain names — `['user-email', 'portfolio-section', 'account-id']`
+— and finds and hides those elements itself, however that is best implemented.
+
+Design is open. Some things worth deciding:
+
+- **By `data-testid` first, then by class, then by visible text?** A name lookup that tries a few
+  strategies would work against most apps without a per-app config, but a text match risks hiding
+  the wrong thing when several elements share a name.
+- **Hide, or remove?** `display: none` is reversible and keeps layout stable; removing from the DOM
+  is unambiguous but can break the app's own scripts mid-render.
+- **Should a name that matches nothing be an error?** Silently matching nothing is how sensitive
+  data ends up in a published video, so a warning — or a failure under a strict flag — is probably
+  the safer default.
+- **Does it compose with `extraCss`?** It should, rather than replace it: `extraCss` is the escape
+  hatch for anything the name lookup cannot express.
+
+Worth noting this is a problem people solve by hand today — passing CSS for the user's email, a
+portfolio section and a watchlist section in `extraCss`, precisely because there is no
+name-based way to say it. Any real application with user data is the test case.
