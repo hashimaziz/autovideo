@@ -55,15 +55,15 @@ function readConfig() {
  * default export and writes the first style, inspection comes back empty and says so, which is a
  * far better failure than refusing to load their file.
  */
-async function loadScript(path: string): Promise<ScriptEntry> {
+async function loadScript(path: string): Promise<LoadedScript> {
   const module = (await import(path)) as { default?: unknown };
 
   if (typeof module.default !== 'function') {
-    // Top-level await already ran the script.
-    return async () => undefined;
+    // Top-level await already ran the script, so there is nothing left to invoke.
+    return { run: async () => undefined, selfDriven: true };
   }
 
-  return module.default as ScriptEntry;
+  return { run: module.default as ScriptEntry, selfDriven: false };
 }
 
 /**
@@ -75,8 +75,15 @@ async function loadScript(path: string): Promise<ScriptEntry> {
  */
 type ScriptEntry = (api?: unknown) => Promise<unknown>;
 
+/** A loaded script, and which of the two styles it turned out to be written in. */
+interface LoadedScript {
+  run: ScriptEntry;
+  /** True when the script built its own session and exported its own video. */
+  selfDriven: boolean;
+}
+
 /** Exposed for the unit suite. Wraps the private loader without exposing its internals. */
-export async function loadScriptForTest(path: string): Promise<ScriptEntry> {
+export async function loadScriptForTest(path: string): Promise<LoadedScript> {
   return loadScript(path);
 }
 
@@ -94,13 +101,29 @@ async function main(): Promise<number> {
   // a browser. With the factory overridden, both script styles walk without rendering.
   const inspection = mode === 'inspect' ? await prepareInspection(config) : undefined;
 
-  const run = await loadScript(scriptPath);
+  const { run, selfDriven } = await loadScript(scriptPath);
 
   if (inspection) {
     // A script written as `export default async (video) => {}` receives the recorder directly.
     // One that builds its own session has already populated the same recorder via the factory.
     await run(inspection.recorder.video);
     inspection.print();
+    return 0;
+  }
+
+  if (selfDriven) {
+    // The script already created its session and called export() itself, at import time. Creating
+    // one here as well launched a second browser, rendered an empty about:blank page through it,
+    // and then failed with "Output file does not contain any stream" — after the real video had
+    // already been written and the command had already reported success. It also doubled the
+    // memory and roughly doubled the wall-clock time of every self-driving render.
+    if (process.env.AUTOVIDEO_OUTPUT) {
+      process.stderr.write(
+        'Note: --output is ignored for scripts that build their own video with createVideo().\n' +
+          'The script chooses its own output path; set it in the script or via its own env vars.\n',
+      );
+    }
+
     return 0;
   }
 

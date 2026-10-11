@@ -193,18 +193,35 @@ describe('short options', () => {
 });
 
 describe('script loading', () => {
-  it('accepts a self-driving script with no default export', async () => {
-    // A script that builds its own session with createVideo() and calls export() has already run
-    // by the time it is imported, thanks to top-level await. Refusing to load it would mean the
-    // CLI only served one of the two ordinary ways to write a video script — and the plan's own
-    // example uses the style this rejects.
+  it('reports a script with no default export as self-driven', async () => {
+    // Such a script has already run by the time it is imported, thanks to its top-level await, so
+    // the runner must not then create a video of its own. That mistake launches a second browser,
+    // renders an empty about:blank page through it and fails with "Output file does not contain
+    // any stream" — after the real video has been written and reported as successful.
     const { loadScriptForTest } = await import('../../src/cli/script-runner.js');
-    const entry = await loadScriptForTest(
-      new URL('../../examples/vertical/vertical-demo.ts', import.meta.url).pathname,
+
+    const loaded = await loadScriptForTest(
+      new URL('../../examples/fixtures/self-driven.ts', import.meta.url).pathname,
     );
 
-    expect(typeof entry).toBe('function');
+    expect(typeof loaded.run).toBe('function');
+    expect(loaded.selfDriven).toBe(true);
+    // And the module really was executed, rather than merely inspected.
+    expect((globalThis as Record<string, unknown>).__autovideoSelfDrivenFixtureRan).toBe(true);
   });
+
+  it('reports an injected-API script as not self-driven', async () => {
+    // The other half of the detection. Getting this backwards is how a self-driving render ends
+    // up launching a second browser and failing on an empty about:blank stream.
+    const { loadScriptForTest } = await import('../../src/cli/script-runner.js');
+
+    const loaded = await loadScriptForTest(
+      new URL('../../examples/fixtures/injected-api.ts', import.meta.url).pathname,
+    );
+
+    expect(loaded.selfDriven).toBe(false);
+    expect(typeof loaded.run).toBe('function');
+  }, 30_000);
 
   it('installs and restores a createVideo override', async () => {
     // The mechanism that lets `inspect` walk a self-driving script without launching a browser.

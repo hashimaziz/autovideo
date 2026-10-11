@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>autovideo fixture — body scrolls</title>
+    <style>
+      /* A shell that scrolls its BODY rather than the document element. Real apps do this to
+         pin a header, and `document.scrollingElement` still reports HTML here even though HTML
+         never scrolls — which is what broke scroll centring until both rules were unified. */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+      body {
+        overflow-y: auto;
+        background: #0b1020;
+        color: #e6ecf7;
+        font:
+          16px -apple-system,
+          Arial,
+          sans-serif;
+      }
+      .filler {
+        height: 2400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #55607d;
+      }
+      #far-target {
+        height: 200px;
+        margin: 0 40px;
+        padding: 24px;
+        background: #151d33;
+        border: 1px solid #2a3557;
+        border-radius: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="filler">top</div>
+    <div id="far-target">far target</div>
+    <div class="filler">bottom</div>
+  </body>
+</html>

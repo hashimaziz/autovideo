@@ -117,10 +117,16 @@ async function executeScript(
   const absoluteScript = resolve(process.cwd(), scriptPath);
   const runner = fileURLToPath(new URL('./script-runner.js', import.meta.url));
 
+  // Distinguish a flag the user actually typed from the one parseArgs filled in. Without this the
+  // runner cannot tell "you asked for this path" from "nobody said anything", and warns about
+  // ignoring --output on every single render.
+  const explicit = (flag: string): boolean =>
+    process.argv.some((argument) => argument === flag || argument.startsWith(`${flag}=`));
+
   const environment = {
     ...process.env,
     AUTOVIDEO_MODE: mode,
-    AUTOVIDEO_OUTPUT: resolve(process.cwd(), options.output),
+    ...(explicit('--output') ? { AUTOVIDEO_OUTPUT: resolve(process.cwd(), options.output) } : {}),
     AUTOVIDEO_OUTPUT_DIR: resolve(process.cwd(), options.outputDir),
     AUTOVIDEO_VIEWPORT: options.viewport,
     AUTOVIDEO_FPS: String(options.fps),

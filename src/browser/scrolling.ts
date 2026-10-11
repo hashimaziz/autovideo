@@ -35,6 +35,28 @@ export const RESOLVE_SCROLLER_SCRIPT = `(() => {
   return 'window';
 })()`;
 
+/**
+ * The same choice as {@link RESOLVE_SCROLLER_SCRIPT}, as an element rather than a name.
+ *
+ * This exists because having two rules for "which element scrolls" is a bug waiting to happen,
+ * and it had already happened once. Measurement used `document.scrollingElement`, which is HTML
+ * even on a page that scrolls its BODY, while every other part of this module checked BODY first.
+ * On such a page the two disagreed, and since measurement is what computes how far to scroll, the
+ * centring offset came back wrong by exactly the current scroll offset — which clamped every
+ * scripted scroll to zero and left the video sitting at the top of a long page while the script
+ * believed it had moved. One rule, two call sites.
+ */
+const SCROLL_CONTAINER_SCRIPT = `(() => {
+  const candidates = [
+    document.body,
+    document.scrollingElement || document.documentElement,
+  ];
+  for (const element of candidates) {
+    if (element && element.scrollHeight > element.clientHeight + 2) return element;
+  }
+  return document.scrollingElement || document.documentElement || null;
+})()`;
+
 /** Which element actually scrolls on a given page. */
 export type ScrollTarget = 'body' | 'html' | 'window';
 
@@ -159,9 +181,7 @@ export function measureElementScript(selector: string): string {
     const node = document.querySelector(${JSON.stringify(selector)});
     if (!node) return null;
     const rect = node.getBoundingClientRect();
-    const container = document.scrollingElement && document.scrollingElement.tagName === 'BODY'
-      ? document.body
-      : document.scrollingElement || document.documentElement;
+    const container = ${SCROLL_CONTAINER_SCRIPT};
     const offset = container ? container.scrollTop : window.scrollY;
     const height = container ? container.scrollHeight : document.documentElement.scrollHeight;
     const client = container ? container.clientHeight : window.innerHeight;

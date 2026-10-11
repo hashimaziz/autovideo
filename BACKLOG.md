@@ -145,11 +145,29 @@ into a fifteen-minute render. All 22 pass.
 `autovideo inspect a worked example/stock-overview.ts` walks it — 56 operations, 6 scenes,
 ~26.6s — without launching a browser.
 
+### Rendered for real
+
+Done, against the dev server with a signed-in session. Doing it found two bugs that no amount of
+selector auditing would have:
+
+1. **The ticker input arrives pre-filled.** `type` appends, so typing AAPL into it produced
+   `AAPLAAPL`, which the analyse endpoint rejected with a 500 and "symbol may be delisted". The
+   port now selects-all and deletes first, which is also what a person does.
+2. **Scrolls did nothing on the real app.** See the scrolling fix below — the last sixteen seconds
+   of the video sat at the top of the dashboard while the script believed every scroll had worked.
+
+The rendered video is correct: analysis, price summary, signals and playbooks all appear, the
+highlight rings are visible, and the email, portfolio and watchlist sections are redacted.
+
 ### Still open
 
-Rendering it for real needs `PRODUCT_URL`, market data and a `storageState` file. Worth doing
-once by hand against the dev server; the remaining five templates (`why_stock_down`, `technical_
-analysis`, `trendline`, `indicator_explainer`, `stock_vs_market`) would follow the same shape.
+The remaining five templates (`why_stock_down`, `technical_analysis`, `trendline`,
+`indicator_explainer`, `stock_vs_market`) are unported and would follow the same shape.
+
+One quirk worth knowing, which is app behaviour rather than a framework bug: the dashboard clears
+the chart options (Bollinger Bands, moving average, support/resistance) when analysis results
+arrive, so the port's `chart-options` beat enables overlays that are then switched off again. Either
+enable them after analysing, or drop the beat.
 
 ## ~~P5 — Element highlighting~~ DONE
 
@@ -247,3 +265,24 @@ Design is open. Some things worth deciding:
 Worth noting this is a problem people solve by hand today — passing CSS for the user's email, a
 portfolio section and a watchlist section in `extraCss`, precisely because there is no
 name-based way to say it. Any real application with user data is the test case.
+
+## P8 — One definition of the scrolling element (fixed, found by rendering for real)
+
+Not a planned item. Found by rendering the the application port against the real app and then reading
+the frames, which is a humbling way to find a bug the tests had been unable to see.
+
+`measureElementScript` and `RESOLVE_SCROLLER_SCRIPT` disagreed about which element scrolls. Every
+other part of `scrolling.ts` checked BODY first; measurement used `document.scrollingElement`, which
+reports HTML even on a page that scrolls its BODY — common in apps that pin a header.
+
+Because measurement is what computes how far to scroll, the centring offset came back wrong by
+exactly the current scroll position, and — since HTML's scroll limit there is zero — every scripted
+scroll clamped to zero. No error, no warning: the render "succeeded" and the video sat at the top of
+a 4500px dashboard for its last sixteen seconds while the script recorded scrolls that had not
+happened.
+
+One rule now, two call sites. Four regression tests on a fixture that scrolls its BODY, including
+the assertion the old code failed: that the element ends up _centred_, not merely reachable.
+
+The lesson is in the test rather than the fix. Asserting "the scroll happened" is what the suite
+did before, and on a document-scrolling page that passes while the underlying rule is wrong.
