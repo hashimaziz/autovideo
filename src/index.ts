@@ -4,7 +4,7 @@
  * The public surface is intentionally small. The target experience is:
  *
  * ```ts
- * import { createVideo } from 'autovideo';
+ * import { createVideo } from '@saltyhasbrown/autovideo';
  *
  * const video = await createVideo({ viewport: 'vertical', fps: 60, seed: 42069 });
  * await video.open('https://yourapp.com');
@@ -40,7 +40,7 @@ export type {
 } from './config/config.js';
 
 // The framework's entry point. Exported here as well as from the module, because a consumer
-// installs the package and imports from 'autovideo' — the whole point of the exports map.
+// installs the package and imports from it by name — the whole point of the exports map.
 export { createVideo } from './video/index.js';
 export type {
   Behavior,

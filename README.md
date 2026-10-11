@@ -19,7 +19,7 @@ autovideo drives a real browser — real clicks, real typing, real scrolling —
 to MP4. The video is the output, not a side effect of testing.
 
 ```ts
-import { createVideo } from 'autovideo';
+import { createVideo } from '@saltyhasbrown/autovideo';
 
 const video = await createVideo({ viewport: 'vertical', fps: 60, seed: 42069 });
 
@@ -36,7 +36,7 @@ await video.export('./demo.mp4');
 ```
 
 ```sh
-npm install autovideo
+npm install @saltyhasbrown/autovideo
 npx playwright install chromium
 ```
 
