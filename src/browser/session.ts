@@ -22,6 +22,7 @@ import {
 import type { VideoConfig } from '../config/config.js';
 import { VideoBrowserError, messageOf } from '../runtime/errors.js';
 import { hideAutomationFlags, installPageStyling } from './determinism.js';
+import { checkChromium, chromiumFix } from './chromium.js';
 
 /**
  * Chromium switches applied to every render.
@@ -145,12 +146,27 @@ export async function launchBrowser(
   config: VideoConfig,
   extras: SessionExtras = {},
 ): Promise<BrowserSession> {
+  // Checked before launching, not caught from a failed launch. Playwright does not download a
+  // browser on install, so a missing one is entirely ordinary — and catching the launch error
+  // instead would surface it only after the script had been written and the render started.
+  const chromiumCheck = await checkChromium(config);
+  if (!chromiumCheck.ok) {
+    throw new VideoBrowserError(
+      chromiumCheck.source === 'configured'
+        ? 'The browser configured as browser.executablePath is unusable.'
+        : 'Chromium is not installed for Playwright.',
+      { hint: chromiumFix(chromiumCheck), cause: undefined },
+    );
+  }
+
   let browser: Browser;
   try {
     browser = await chromium.launch(buildLaunchOptions(config));
   } catch (error) {
+    // The browser exists but would not start: a sandbox or permission problem, most likely. The
+    // pre-check above already covered "not installed", so this message is about something else.
     throw new VideoBrowserError(`Could not launch Chromium: ${messageOf(error)}`, {
-      hint: 'Run `npx playwright install chromium`. If a custom browser is configured, check browser.executablePath.',
+      hint: `Chromium is present at ${chromiumCheck.path} but would not start. If this is a sandboxed or containerised environment, it may need extra privileges or --no-sandbox.`,
       cause: error,
     });
   }

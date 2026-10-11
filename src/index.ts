@@ -53,6 +53,8 @@ export type {
   WaitOptions,
 } from './video/index.js';
 export { DEFAULT_HIGHLIGHT } from './motion/highlight.js';
+export { checkChromium, chromiumFix } from './browser/chromium.js';
+export type { ChromiumCheck } from './browser/chromium.js';
 export { CURSOR_ATTRIBUTE, CURSOR_SELECTOR } from './motion/cursor.js';
 export type { CursorApi, HighlightVisual } from './video/index.js';
 export {

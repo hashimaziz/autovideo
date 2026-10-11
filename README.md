@@ -207,8 +207,30 @@ npm install autovideo
 npx playwright install chromium
 ```
 
-Requires Node 20.11+. Chromium is a separate download because Playwright manages it; `autovideo
-doctor` tells you if it is missing.
+Requires Node 20.11+.
+
+**Chromium is a separate download, and that is deliberate.** Playwright no longer fetches a browser
+during `npm install`, because silently pulling ~150MB inside someone's CI is how a package gets
+hated. The cost is one extra command, so the framework tries to make that cost impossible to miss:
+
+- **`autovideo doctor`** reports whether a usable browser is present, and how to fix it if not.
+  Worth running once after installing.
+- **`createVideo()` checks before it launches anything.** A missing browser fails immediately with
+  that instruction, rather than partway through a render.
+
+`npx playwright install chromium` downloads a browser you control the version of. If you would
+rather use one you already have, point at it:
+
+```ts
+createVideo({
+  browser: {
+    executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  },
+});
+```
+
+A path that is wrong is reported as a configuration mistake, distinctly from "no browser is
+installed" — so a typo never sends you to download a second browser.
 
 ## Publish checklist
 

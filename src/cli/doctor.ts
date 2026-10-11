@@ -13,11 +13,10 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { chromium } from 'playwright';
-
 import { resolveConfig, VIEWPORT_PRESET_NAMES, type VideoConfigInput } from '../config/config.js';
 import { VERSION } from '../version.js';
 import { resolveFfmpegBinary } from '../recorder/encoder.js';
+import { checkChromium, chromiumFix } from '../browser/chromium.js';
 import { VideoError } from '../runtime/errors.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -98,18 +97,29 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<{
   );
 
   // --- Chromium ---
-  try {
-    const executable = chromium.executablePath();
-    await access(executable, constants.X_OK);
-    add({ name: 'Chromium', status: 'ok', detail: executable });
-  } catch {
-    add({
-      name: 'Chromium',
-      status: 'fail',
-      detail: 'not installed or not executable',
-      fix: 'Run `npx playwright install chromium`.',
-    });
-  }
+  // The same probe launchBrowser uses, so `doctor` cannot report a browser as fine that a render
+  // would then refuse — or the reverse, which is the more annoying of the two.
+  const chromiumCheck = await checkChromium(config);
+  add(
+    chromiumCheck.ok
+      ? {
+          name: 'Chromium',
+          status: 'ok',
+          detail:
+            chromiumCheck.source === 'configured'
+              ? `${chromiumCheck.path} (browser.executablePath)`
+              : chromiumCheck.path,
+        }
+      : {
+          name: 'Chromium',
+          status: 'fail',
+          detail:
+            chromiumCheck.source === 'configured'
+              ? `browser.executablePath unusable: ${chromiumCheck.path}`
+              : 'not installed',
+          fix: chromiumFix(chromiumCheck),
+        },
+  );
 
   // --- Output directory ---
   try {
