@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * The `autovideo` command-line entry point.
  *
@@ -17,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 import { VERSION } from '../version.js';
 import { flag, intOption, option, parseArgs, unknownOptions, type ParsedArgs } from './args.js';
@@ -289,10 +291,34 @@ export async function run(argv: readonly string[]): Promise<void> {
   }
 }
 
-// Only auto-run when invoked directly, so tests can import `main` without side effects.
-const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+/**
+ * Whether this module is the program being run, rather than an import.
+ *
+ * The naive check — comparing `import.meta.url` with the file URL of `process.argv[1]` — works in
+ * development and fails once the package is installed, because npm invokes a bin through a
+ * *symlink* in `node_modules/.bin`. The URL of the real file and the path of the symlink differ,
+ * the comparison is false, and the CLI exits 0 without doing anything at all. No error, no output:
+ * `npx autovideo --version` simply printed nothing.
+ *
+ * So the symlink is resolved before comparing. A bin is also run directly by npm, so the check
+ * still has to distinguish an import from an invocation, which the resolved paths do correctly.
+ */
+function isDirectInvocation(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
 
-if (invokedDirectly) {
+  try {
+    return (
+      import.meta.url === pathToFileURL(realpathSync(entry)).href ||
+      // The bin may have been invoked through a relative path or a bare name from .bin.
+      import.meta.url === pathToFileURL(resolve(entry)).href
+    );
+  } catch {
+    // A path that cannot be resolved cannot be this file.
+    return false;
+  }
+}
+
+if (isDirectInvocation()) {
   void run(process.argv.slice(2));
 }

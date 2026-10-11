@@ -38,3 +38,28 @@ export type {
   ViewportInput,
   ViewportPreset,
 } from './config/config.js';
+
+// The framework's entry point. Exported here as well as from the module, because a consumer
+// installs the package and imports from 'autovideo' — the whole point of the exports map.
+export { createVideo } from './video/index.js';
+export type {
+  Behavior,
+  ExportResult,
+  HighlightOptions,
+  NaturalOptions,
+  ScrollOptions,
+  TypeOptions,
+  Video,
+  WaitOptions,
+} from './video/index.js';
+export { DEFAULT_HIGHLIGHT } from './motion/highlight.js';
+export { CURSOR_ATTRIBUTE, CURSOR_SELECTOR } from './motion/cursor.js';
+export type { CursorApi, HighlightVisual } from './video/index.js';
+export {
+  VideoError,
+  VideoActionError,
+  VideoBrowserError,
+  VideoEncoderError,
+  VideoRecorderError,
+} from './runtime/errors.js';
+export { VideoRenderError } from './runtime/render-error.js';

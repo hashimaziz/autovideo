@@ -1,7 +1,6 @@
 {
   "name": "autovideo",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "dependencies": {
     "ffmpeg-static": "^5.3.0",
@@ -20,14 +19,14 @@
     "node": ">=20.11"
   },
   "bin": {
-    "autovideo": "./dist/src/cli/bin.js"
+    "autovideo": "./dist/cli/bin.js"
   },
-  "main": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "files": [
@@ -45,6 +44,28 @@
     "test:all": "npm run typecheck && npm run test && npm run test:integration",
     "dev": "tsx src/cli/bin.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
-  }
+    "format:check": "prettier --check .",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run test:all"
+  },
+  "license": "MIT",
+  "keywords": [
+    "video",
+    "playwright",
+    "browser",
+    "screencast",
+    "mp4",
+    "ffmpeg",
+    "product-video",
+    "automation",
+    "deterministic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOURNAME/autovideo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOURNAME/autovideo/issues"
+  },
+  "homepage": "https://github.com/YOURNAME/autovideo#readme"
 }

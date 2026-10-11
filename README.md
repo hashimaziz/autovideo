@@ -200,6 +200,27 @@ await Promise.all(['aapl', 'msft', 'nvda'].map((t) => renderScript(t)));
 Renders are independent and safe to run concurrently, including into the same output directory:
 each takes its own scratch space and its own debug stamp.
 
+## Install
+
+```sh
+npm install autovideo
+npx playwright install chromium
+```
+
+Requires Node 20.11+. Chromium is a separate download because Playwright manages it; `autovideo
+doctor` tells you if it is missing.
+
+## Publish checklist
+
+1. `npm run test:all` — typecheck, unit and integration.
+2. `npm pack` and **install the tarball into a scratch project**, then import it and run
+   `npx autovideo --version`. Four of the five bugs fixed during publish prep were invisible from
+   inside this repo and only appeared once installed — a stale `main`, a missing shebang, a `bin`
+   that exited silently through npm's symlink, and `createVideo` not exported at all.
+3. Bump `version`, commit, tag.
+4. `npm publish --access public`.
+5. Create the GitHub repo and `git remote add origin`, then push with `--follow-tags`.
+
 ## Authenticated apps
 
 ```ts

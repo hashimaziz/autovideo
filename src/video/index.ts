@@ -1192,3 +1192,5 @@ async function scrollToOffsetAnimated(
 
   await clock.wait(durationMs, 'scroll');
 }
+
+export type { HighlightOptions, HighlightVisual } from '../motion/highlight.js';

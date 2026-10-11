@@ -240,3 +240,32 @@ describe('script loading', () => {
     await (real as unknown as { dispose(): Promise<void> }).dispose();
   }, 120_000);
 });
+
+describe('direct invocation', () => {
+  it('runs when the entry is reached through a symlink', async () => {
+    // npm invokes a bin through a symlink in node_modules/.bin, so `import.meta.url` (the real
+    // file) never equals `pathToFileURL(process.argv[1])` (the symlink). The naive check made the
+    // CLI exit 0 having done nothing at all: `npx autovideo --version` printed nothing, with no
+    // error to explain why. Only installing the packed tarball and running it surfaced this.
+    const { mkdtempSync, symlinkSync, realpathSync, chmodSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+
+    const dir = mkdtempSync(join(tmpdir(), 'autovideo-bin-'));
+    const link = join(dir, 'autovideo');
+    const entry = new URL('../../dist/cli/bin.js', import.meta.url).pathname;
+
+    symlinkSync(realpathSync(entry), link);
+    // npm marks a bin executable when it installs the package, so the fixture must too — without
+    // it the spawn fails with EACCES and the test would fail for the wrong reason.
+    chmodSync(link, 0o755);
+    expect(realpathSync(link)).toBe(realpathSync(entry));
+
+    // The behaviour, not just the mechanism: executed through the symlink, the CLI must actually
+    // run and print its version. Before the fix this exited 0 with empty stdout.
+    const output = execFileSync(link, ['--version'], { encoding: 'utf8' });
+
+    expect(output.trim()).toMatch(/^\d+\.\d+\.\d+/);
+  }, 60_000);
+});
