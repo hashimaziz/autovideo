@@ -45,25 +45,37 @@ so it is a race, not a deterministic bug.
 Dropping a timed-out frame is deterministic by construction: logical time does not advance for a
 frame that was not captured, so the video loses one frame of duration and nothing else.
 
-### Not established
+### PageGate is defective — fix or remove it first
 
-- **Which specific `await` remains unbounded.** Instrumentation showed the pump alive but not
-  progressing, at 0 or 1 frames written. Every remaining candidate appeared bounded on paper.
-- **`PageGate`'s hand-off semantics are unverified.** Two unit tests were written for its
-  priority and cancellation behaviour; both disagreed with the implementation, and rather than
-  ship assertions that could not be confirmed they were **removed**. This is the most important
-  thing to check first: the gate is load-bearing for the mitigation above, and currently has no
-  test coverage at all.
+A full unit suite for `PageGate` was written and **all hand-off behaviour fails**:
+one `release()` resolves **two** waiters, priority is not honoured, and
+`withLock` does not serialise concurrent bodies.
+
+`release()` splices exactly one waiter and resolves exactly one promise, so
+the observed behaviour cannot be explained by the code as written. Either the
+queue is being mutated somewhere unaccounted for, or the promise-per-waiter
+wiring in `#enqueue` is not what it appears to be. **This was not resolved.**
+
+The tests were removed rather than committed red. The implementation is still
+in the render path, because it measurably reduces the failure rate — but it
+should be treated as untrusted: it under-serialises, which means two holders
+can hold the gate at once and the mutual exclusion it was written to provide
+does not actually hold.
+
+**Do not build on `PageGate` until it is fixed.** Either correct it with the
+unit suite restored, or remove it and re-measure the failure rate without it.
 
 ### Next steps
 
-1. **Write PageGate unit tests first.** It is the newest and least-verified code in the
-   render path. A small, deterministic, browser-free test of hand-off, priority, and cancellation
-   will either expose a real defect or confirm the implementation.
+1. **Rewrite `PageGate` from scratch against a unit suite**, committed alongside it. The
+   simplest correct version is a promise chain rather than an explicit queue:
+   each acquirer awaits the previous holder's release promise, and a timed-out
+   acquirer simply stops awaiting. That removes the entire class of "cancelled
+   waiter became a ghost owner" bug rather than patching around it.
 2. **Instrument for a hang, properly.** Ad-hoc `process.stderr.write` misled me: stderr to a pipe
    is asynchronous in Node and reorders lines. Use `fs.writeSync` to a file, or wrap the pending
    operation in a `Promise.race` that records where it is still awaiting after N seconds.
-3. Only then re-run `video.test.ts` in a loop (10+ iterations) to confirm.
+3. Re-run `video.test.ts` in a loop (10+ iterations) to confirm the rate moved.
 
 ### Note on the flakiness being intermittent
 
