@@ -1,21 +1,34 @@
-MIT License
+# License
 
-Copyright (c) 2026 autovideo contributors
+**autovideo is source-available under a split license. Using it commercially is not free.**
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+| you are | what you may do | do you need a license? |
+|---|---|---|
+| An individual — personal projects, learning, hobby, content you make for yourself | Use, modify, publish videos, self-host | **No** |
+| Open source, non-profit, education, research, or a government body | Use, modify, run internally, contribute | **No** |
+| A company or individual, using it to produce **commercial, advertising, marketing, or client-facing work** | Use, modify | **Yes — this requires a paid commercial license** |
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+The grant for everything in the first two rows is the
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/),
+reproduced in full in [`LICENSES/PolyForm-Noncommercial-1.0.0.txt`](LICENSES/PolyForm-Noncommercial-1.0.0.txt)
+and governed by [`TERMS.md`](TERMS.md).
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Commercial use is licensed separately. See [COMMERCIAL.md](COMMERCIAL.md) for what counts as
+commercial and how to obtain a license.
+
+Required Notice:
+
+> Copyright (c) 2026 autovideo contributors — free for non-commercial use; a paid license is
+> required for commercial use. See https://github.com/hashimaziz/autovideo/blob/main/COMMERCIAL.md
+
+## Why not just MIT?
+
+MIT grants the right to use this commercially to *anyone*, including a company, with no
+conditions and no obligation to do anything. It is the wrong licence for software whose purpose is
+to be sold to exactly those companies, and it could not be changed later to require payment:
+a licence once granted cannot be withdrawn from the version that carried it.
+
+This split licence keeps the things that should be free genuinely free — a developer experimenting
+on their own videos, a student, an open-source contributor, a nonprofit — and makes the thing that
+should be paid genuinely payable. If you would rather everyone paid, that is a different licence,
+and this is not it.

@@ -32,7 +32,10 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "TERMS.md",
+    "COMMERCIAL.md",
+    "LICENSES"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -48,7 +51,7 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run test:all"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "keywords": [
     "video",
     "playwright",

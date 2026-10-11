@@ -11,6 +11,12 @@ output/
 *.webm
 !research/**/*.mp4
 
+# Debug artefacts. Traces embed screencast frames of whatever was on screen and a full network
+# log, so these are not just large — they are a record of whatever the app was displaying at the
+# time, which for an authenticated session can be someone's personal data. They are the reason
+# diagnostics are written to a per-run stamp directory rather than a fixed one.
+/debug/
+
 # Probe scratch: videos, extracted frames, Chromium profiles
 **/.out/
 

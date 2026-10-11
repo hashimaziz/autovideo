@@ -1,3 +1,18 @@
+> ## ⚠️ Licence — commercial use is not free
+>
+> autovideo is **source-available, not open source**, under a split licence.
+>
+> - **Individuals, students, hobbyists, nonprofits, education, research, government, and
+>   open-source contributors: free.** No registration, no key, no revenue threshold.
+> - **Companies using it to produce advertising, marketing, or client-facing video: a paid
+>   commercial licence is required.**
+>
+> If the video you make is something you sell, or something that earns money for a business, it is
+> commercial. See [COMMERCIAL.md](COMMERCIAL.md) for exactly what that covers, and
+> [LICENSE](LICENSE) / [TERMS.md](TERMS.md) for the terms themselves.
+>
+> Full terms: [LICENSE](LICENSE) · [TERMS.md](TERMS.md) · [COMMERCIAL.md](COMMERCIAL.md)
+
 # autovideo
 
 **Create polished product videos from code.**
@@ -232,6 +247,20 @@ createVideo({
 A path that is wrong is reported as a configuration mistake, distinctly from "no browser is
 installed" — so a typo never sends you to download a second browser.
 
+## Licence
+
+Split licence, described at the top of this file. The legal text is the
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/),
+reproduced verbatim in [`LICENSES/`](LICENSES/), with the practical reading in
+[TERMS.md](TERMS.md) and the commercial boundary in [COMMERCIAL.md](COMMERCIAL.md).
+
+Free: individuals, personal projects, learning, hobby, open-source development, nonprofits,
+education, research, government, and evaluation. Commercial production by a company requires a
+paid licence.
+
+MIT was deliberately **not** used. MIT grants unrestricted commercial use to anyone permanently,
+which is incompatible with charging for the thing this software is for.
+
 ## Publish checklist
 
 1. `npm run test:all` — typecheck, unit and integration.
@@ -328,7 +357,3 @@ asserts.
 
 `ARCHITECTURE_AUDIT.md` documents why this framework replaced the screencast approach, including
 the measurements that motivated it.
-
-## Licence
-
-MIT
