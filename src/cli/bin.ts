@@ -16,6 +16,7 @@
 
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
@@ -142,9 +143,17 @@ async function executeScript(
       : {}),
   };
 
-  // tsx is a dev dependency of this repo; resolve it relative to the CLI so the command works
-  // from a checkout without a global install.
-  const tsx = fileURLToPath(new URL('../../node_modules/tsx/dist/cli.mjs', import.meta.url));
+  // Resolve tsx from the caller's project first, then from this package. The caller may use its
+  // own tsx installation, while the package ships tsx as a runtime dependency for projects that
+  // do not already have it.
+  const projectRequire = createRequire(resolve(process.cwd(), 'package.json'));
+  const packageRequire = createRequire(import.meta.url);
+  let tsx: string;
+  try {
+    tsx = projectRequire.resolve('tsx/cli');
+  } catch {
+    tsx = packageRequire.resolve('tsx/cli');
+  }
 
   const child = spawn(process.execPath, [tsx, runner, absoluteScript], {
     stdio: 'inherit',
